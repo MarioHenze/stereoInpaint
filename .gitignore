@@ -1,3 +1,6 @@
+# CMake user configuration
+*.user
+
 # Prerequisites
 *.d
 
