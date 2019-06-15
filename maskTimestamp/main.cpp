@@ -1,4 +1,5 @@
 #include <algorithm>
+#include <filesystem>
 #include <iostream>
 #include <iterator>
 #include <map>
@@ -16,6 +17,37 @@ void showImg(cv::Mat const & img)
     cv::waitKey();
 }
 
+cv::Mat threshold_hsv(const cv::Mat & in,
+                      const cv::Scalar & color,
+                      const cv::Scalar & variation)
+{
+    cv::Mat hsv_in;
+    cv::Mat ret;
+    cv::cvtColor(in, hsv_in, cv::COLOR_BGR2HSV);
+
+    cv::inRange(hsv_in, color - variation, color + variation, ret);
+
+    return ret;
+}
+
+cv::Mat expand_morphological(const cv::Mat & in,
+                             const size_t repetitions = 1)
+{
+    cv::Mat morphKernel = getStructuringElement(cv::MorphShapes::MORPH_RECT,
+                                                cv::Size(3 , 3));
+
+    cv::Mat ret{in};
+
+    for (size_t i = 0; i < repetitions; ++i) {
+        morphologyEx(in,
+                     ret,
+                     cv::MorphTypes::MORPH_DILATE,
+                     morphKernel);
+    }
+
+    return ret;
+}
+
 int main(int argc, char *argv[])
 {
     constexpr std::pair<unsigned int, unsigned int> origin {1715, 1695};
@@ -24,12 +56,10 @@ int main(int argc, char *argv[])
             unsigned int>
             extend {2495 - origin.first,1785 - origin.second};
 
-    //constexpr double area_upper_threshold{7000};
-    //constexpr double area_lower_threshold{100};
-
     const std::string options{
         "{help h usage ? |  | Print this message.}"
         "{gui | | Show input and resulting mask as window.}"
+        "{force | | Force writing over existing files}"
         "{@input | | Image to search for timestamps}"
         "{@output | | Image to save the mask to}"
     };
@@ -54,6 +84,15 @@ int main(int argc, char *argv[])
         return -1;
     }
 
+    if (!parser.has("force") &&
+        std::filesystem::exists(parser.get<std::string>("@output")))
+    {
+        std::cout << "File with name "
+                  << parser.get<std::string>("@output")
+                  << " already exists. Force override to continue!";
+        return -1;
+    }
+
     // Cut out usual timestamp region
     cv::Mat in_image_cropped = in_image({origin.first,
                                          origin.second,
@@ -63,108 +102,30 @@ int main(int argc, char *argv[])
     if(parser.has("gui"))
         showImg(in_image_cropped);
 
-    // Convert to grayscale for gradient computation
-    cv::Mat in_grayscale;
-    cv::cvtColor(in_image_cropped, in_grayscale, cv::COLOR_RGB2GRAY);
 
-    if(parser.has("gui"))
-        showImg(in_grayscale);
-
-    // Derive morphological gradient image
-    cv::Mat in_grad;
-    cv::Mat morphKernel = cv::getStructuringElement(
-                cv::MorphShapes::MORPH_ELLIPSE,
-                cv::Size(3,3));
-    cv::morphologyEx(
-                in_grayscale,
-                in_grad,
-                cv::MorphTypes::MORPH_GRADIENT,
-                morphKernel);
-
-    if(parser.has("gui"))
-        showImg(in_grad);
-
-    // Convert to binary threshold image for morphological filtering
-    cv::Mat in_bw;
-    cv::threshold(in_grad,
-                  in_bw,
-                  0.,
-                  255.,
-                  cv::THRESH_BINARY | cv::THRESH_OTSU);
-
-    if(parser.has("gui"))
-        showImg(in_bw);
-
-    // Fill holes and horizontal and vertical "gaps"
-    cv::Mat in_connected;
-    morphKernel = getStructuringElement(cv::MorphShapes::MORPH_RECT,
-                                        cv::Size(3 , 3));
-    morphologyEx(in_bw,
-                 in_connected,
-                 cv::MorphTypes::MORPH_CLOSE,
-                 morphKernel);
-
-    morphKernel = getStructuringElement(cv::MorphShapes::MORPH_RECT,
-                                        cv::Size(9 , 1));
-    morphologyEx(in_connected,
-                 in_connected,
-                 cv::MorphTypes::MORPH_CLOSE,
-                 morphKernel);
-
-    morphKernel = getStructuringElement(cv::MorphShapes::MORPH_RECT,
-                                        cv::Size(1 , 9));
-    morphologyEx(in_connected,
-                 in_connected,
-                 cv::MorphTypes::MORPH_CLOSE,
-                 morphKernel);
-
-    if(parser.has("gui"))
-        showImg(in_connected);
-
-//    cv::Mat in_inv;
-//    cv::bitwise_not(in_connected, in_inv);
-//    std::vector<std::vector<cv::Point>> contours;
-//    cv::findContours(in_inv,
-//                     contours,
-//                     cv::RetrievalModes::RETR_LIST,
-//                     cv::ContourApproximationModes::CHAIN_APPROX_SIMPLE);
-
-//    if(parser.has("gui"))
-//        showImg(in_inv);
-
-//    // Filter out all invalid contours and hopefully the background
-//    auto iter = std::remove_if(contours.begin(),
-//                   contours.end(),
-//                   [] (decltype(contours)::value_type contour)
-//                   {
-//                       return area_lower_threshold > cv::contourArea(contour) ||
-//                        area_upper_threshold < cv::contourArea(contour);
-//                   });
-//    contours.erase(iter, contours.cend());
-
-//    cv::cvtColor(in_inv, in_inv, cv::ColorConversionCodes::COLOR_GRAY2RGB);
-//    cv::drawContours(in_inv, contours, -1, {0,255,0}, cv::FILLED);
-
-//    if(parser.has("gui"))
-//        showImg(in_inv);
-
-    // Write out mask image
-    cv::Mat mask{in_image.size(), CV_8UC1};
-    in_connected.copyTo(mask({origin.first,
-                              origin.second,
-                              extend.first,
-                              extend.second}));
+    cv::Mat mask = threshold_hsv(in_image_cropped,
+                                 cv::Scalar{12, 245, 245},
+                                 cv::Scalar{12, 10, 10});
 
     if(parser.has("gui"))
         showImg(mask);
 
-    std::string filename = parser.get<std::string>("@input");
+    cv::Mat filled = expand_morphological(mask, 3);
 
-    std::istringstream iss(filename);
-    std::vector<std::string> results(std::istream_iterator<std::string>{iss},
-                                     std::istream_iterator<std::string>());
+    if(parser.has("gui"))
+        showImg(filled);
 
-    cv::imwrite(parser.get<std::string>("@output"), mask);
+    // Write out mask image
+    cv::Mat full_mask{in_image.size(), CV_8UC1};
+    mask.copyTo(full_mask({origin.first,
+                           origin.second,
+                           extend.first,
+                           extend.second}));
+
+    if(parser.has("gui"))
+        showImg(full_mask);
+
+    cv::imwrite(parser.get<std::string>("@output"), full_mask);
 
     return 0;
 }
