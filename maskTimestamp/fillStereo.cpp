@@ -51,6 +51,7 @@ void show_horizontal(std::vector<std::reference_wrapper<cv::Mat>> const images,
                1. / images.size());
     cv::namedWindow(window_name, cv::WINDOW_NORMAL);
     cv::imshow(window_name, composite);
+    cv::resizeWindow(window_name, width, height);
     cv::waitKey(timeout);
 }
 
@@ -109,14 +110,19 @@ int main(int argc, char *argv[])
         return -1;
     }
 
-    show_horizontal({left, right, left_mask, right_mask});
+    //show_horizontal({left, right, left_mask, right_mask});
 
     {// Find feature points in image for correspondance
-        auto feature_detector = cv::AKAZE::create();
+        auto feature_detector = cv::AKAZE::create(cv::AKAZE::DESCRIPTOR_MLDB,
+                                                  0,
+                                                  3,
+                                                  0.002f);
         cv::Mat inverted_mask_left;
         cv::Mat inverted_mask_right;
         cv::bitwise_not(left_mask, inverted_mask_left);
         cv::bitwise_not(right_mask, inverted_mask_right);
+
+        //show_horizontal({inverted_mask_left, inverted_mask_right});
 
         std::vector<cv::KeyPoint> left_keypoints;
         std::vector<cv::KeyPoint> right_keypoints;
@@ -131,6 +137,13 @@ int main(int argc, char *argv[])
                                            inverted_mask_right,
                                            right_keypoints,
                                            right_descriptors);
+
+        cv::Mat keyout_left;
+        cv::Mat keyout_right;
+        cv::drawKeypoints(left, left_keypoints, keyout_left);
+        cv::drawKeypoints(right, right_keypoints, keyout_right);
+        show_horizontal({keyout_left, keyout_right});
+
         if (left_descriptors.empty())
             cv::error(0,
                       "left descriptor empty",
@@ -145,7 +158,7 @@ int main(int argc, char *argv[])
                       __LINE__);
 
         std::vector<std::vector<cv::DMatch>> matches;
-        auto matcher = cv::BFMatcher{};
+        auto matcher = cv::FlannBasedMatcher(new cv::flann::LshIndexParams(20, 20, 2));
         matcher.knnMatch(left_descriptors, right_descriptors, matches, 2);
 
         matches.erase(
@@ -155,9 +168,18 @@ int main(int argc, char *argv[])
                         [](std::vector<cv::DMatch> match){
                             assert(match.size() == 2);
                             return match.front().distance >
-                                .7f * match.back().distance;
+                                .8f * match.back().distance;
                     }),
                 matches.end());
+
+        cv::Mat matched;
+        cv::drawMatches(left,
+                        left_keypoints,
+                        right,
+                        right_keypoints,
+                        matches,
+                        matched);
+        show_horizontal({matched});
 
         std::vector<cv::Point2f> left_points;
         std::vector<cv::Point2f> right_points;
