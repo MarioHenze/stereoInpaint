@@ -4,6 +4,7 @@
 #include <vector>
 
 #include <opencv2/calib3d.hpp>
+#include <opencv2/core.hpp>
 #include <opencv2/core/utility.hpp>
 #include <opencv2/features2d.hpp>
 #include <opencv2/highgui.hpp>
@@ -110,105 +111,9 @@ int main(int argc, char *argv[])
         return -1;
     }
 
-    //show_horizontal({left, right, left_mask, right_mask});
+    auto sm = cv::StereoSGBM::create(0, 64, 5, 10, 100, 0, 0, 10, 50, 1);
 
-    {// Find feature points in image for correspondance
-        auto feature_detector = cv::AKAZE::create(cv::AKAZE::DESCRIPTOR_MLDB,
-                                                  0,
-                                                  3,
-                                                  0.002f);
-        cv::Mat inverted_mask_left;
-        cv::Mat inverted_mask_right;
-        cv::bitwise_not(left_mask, inverted_mask_left);
-        cv::bitwise_not(right_mask, inverted_mask_right);
-
-        //show_horizontal({inverted_mask_left, inverted_mask_right});
-
-        std::vector<cv::KeyPoint> left_keypoints;
-        std::vector<cv::KeyPoint> right_keypoints;
-        cv::Mat left_descriptors;
-        cv::Mat right_descriptors;
-
-        feature_detector->detectAndCompute(left,
-                                           inverted_mask_left,
-                                           left_keypoints,
-                                           left_descriptors);
-        feature_detector->detectAndCompute(right,
-                                           inverted_mask_right,
-                                           right_keypoints,
-                                           right_descriptors);
-
-        cv::Mat keyout_left;
-        cv::Mat keyout_right;
-        cv::drawKeypoints(left, left_keypoints, keyout_left);
-        cv::drawKeypoints(right, right_keypoints, keyout_right);
-        show_horizontal({keyout_left, keyout_right});
-
-        if (left_descriptors.empty())
-            cv::error(0,
-                      "left descriptor empty",
-                      __FUNCTION__,
-                      __FILE__,
-                      __LINE__);
-        if (right_descriptors.empty())
-            cv::error(0,
-                      "right descriptor empty",
-                      __FUNCTION__,
-                      __FILE__,
-                      __LINE__);
-
-        std::vector<std::vector<cv::DMatch>> matches;
-        auto matcher = cv::FlannBasedMatcher(new cv::flann::LshIndexParams(20, 20, 2));
-        matcher.knnMatch(left_descriptors, right_descriptors, matches, 2);
-
-        matches.erase(
-                    std::remove_if(
-                        matches.begin(),
-                        matches.end(),
-                        [](std::vector<cv::DMatch> match){
-                            assert(match.size() == 2);
-                            return match.front().distance >
-                                .8f * match.back().distance;
-                    }),
-                matches.end());
-
-        cv::Mat matched;
-        cv::drawMatches(left,
-                        left_keypoints,
-                        right,
-                        right_keypoints,
-                        matches,
-                        matched);
-        show_horizontal({matched});
-
-        std::vector<cv::Point2f> left_points;
-        std::vector<cv::Point2f> right_points;
-
-        for (auto const & match : matches)
-        {
-            assert(match.size() == 2);
-
-            auto left_index = match.front().queryIdx;
-            auto right_index = match.back().queryIdx;
-
-            left_points.emplace_back(left_keypoints.at(left_index).pt);
-            right_points.emplace_back(right_keypoints.at(right_index).pt);
-        }
-
-        cv::Mat homography = cv::findHomography(left_points,
-                                                right_points,
-                                                cv::RANSAC);
-
-        cv::Mat left_rectified;
-        cv::undistort(left, left_rectified, homography, {});
-
-        cv::imshow("rect", left_rectified);
-        cv::waitKey(0);
-    }
-
-    auto sm = cv::StereoBM::create();
-
-    cv::Mat disparity_map;
+    cv::Mat disparity_map(left.rows, left.cols, CV_8U);
     cv::Mat left_mono;
     cv::Mat right_mono;
 
@@ -216,8 +121,12 @@ int main(int argc, char *argv[])
     cv::cvtColor(right, right_mono, cv::COLOR_BGR2GRAY);
     sm->compute(left_mono, right_mono, disparity_map);
 
-    cv::imshow("Disparity", disparity_map);
-    cv::waitKey();
+    disparity_map.convertTo(disparity_map, CV_8UC1);
+    std::cout << cv::typeToString(disparity_map.type()) << std::endl;
+    cv::Mat disparity_map_contrasted(disparity_map);
+    cv::equalizeHist(disparity_map, disparity_map_contrasted);
+
+    show_horizontal({disparity_map_contrasted});
 
     return 0;
 }
