@@ -1,5 +1,6 @@
 #include <algorithm>
 #include <filesystem>
+#include <future>
 #include <iostream>
 #include <vector>
 
@@ -10,6 +11,7 @@
 #include <opencv2/highgui.hpp>
 #include <opencv2/imgcodecs.hpp>
 #include <opencv2/imgproc.hpp>
+#include <opencv2/stereo.hpp>
 
 void show_horizontal(std::vector<std::reference_wrapper<cv::Mat>> const images,
                      std::string const window_name = "images",
@@ -24,7 +26,7 @@ void show_horizontal(std::vector<std::reference_wrapper<cv::Mat>> const images,
 
     for (auto const & image: images)
     {
-        assert(image.get().dims == 2);
+        //assert(image.get().dims == 2);
         assert(image.get().type() == type);
 
         width += image.get().cols;
@@ -54,6 +56,16 @@ void show_horizontal(std::vector<std::reference_wrapper<cv::Mat>> const images,
     cv::imshow(window_name, composite);
     cv::resizeWindow(window_name, width, height);
     cv::waitKey(timeout);
+}
+
+void compute_disparity(const cv::Mat & from,
+                       const cv::Mat & to,
+                       cv::Mat & disparity)
+{
+    auto sm = cv::stereo::QuasiDenseStereo::create({from.cols, from.rows});
+
+    sm->process(from, to);
+    disparity = sm->getDisparity();
 }
 
 int main(int argc, char *argv[])
@@ -111,22 +123,24 @@ int main(int argc, char *argv[])
         return -1;
     }
 
-    auto sm = cv::StereoSGBM::create(0, 64, 5, 10, 100, 0, 0, 10, 50, 1);
+    cv::Mat disparity_left;
+    cv::Mat disparity_right;
 
-    cv::Mat disparity_map(left.rows, left.cols, CV_8U);
-    cv::Mat left_mono;
-    cv::Mat right_mono;
+    auto lr_disp_future = std::async(std::launch::async,
+                                     compute_disparity,
+                                     left,
+                                     right,
+                                     std::ref(disparity_left));
+    auto rl_disp_future = std::async(std::launch::async,
+                                     compute_disparity,
+                                     right,
+                                     left,
+                                     std::ref(disparity_right));
 
-    cv::cvtColor(left, left_mono, cv::COLOR_BGR2GRAY);
-    cv::cvtColor(right, right_mono, cv::COLOR_BGR2GRAY);
-    sm->compute(left_mono, right_mono, disparity_map);
+    lr_disp_future.get();
+    rl_disp_future.get();
 
-    disparity_map.convertTo(disparity_map, CV_8UC1);
-    std::cout << cv::typeToString(disparity_map.type()) << std::endl;
-    cv::Mat disparity_map_contrasted(disparity_map);
-    cv::equalizeHist(disparity_map, disparity_map_contrasted);
-
-    show_horizontal({disparity_map_contrasted});
+    show_horizontal({disparity_left, disparity_right});
 
     return 0;
 }
