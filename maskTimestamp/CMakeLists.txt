@@ -12,5 +12,9 @@ project(maskTimestamp VERSION 0.1 LANGUAGES CXX)
 add_executable(${PROJECT_NAME} "main.cpp")
 target_link_libraries(${PROJECT_NAME} ${OpenCV_LIBRARIES} stdc++fs)
 
-add_executable(fillStereo "fillStereo.cpp")
+add_executable(
+    fillStereo
+    fillStereo.cpp
+    costvolume.h
+    costvolume.cpp)
 target_link_libraries(fillStereo ${OpenCV_LIBRARIES} stdc++fs pthread)

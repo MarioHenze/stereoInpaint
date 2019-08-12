@@ -13,8 +13,8 @@
 #include <opencv2/imgproc.hpp>
 #include <opencv2/stereo.hpp>
 
-void show_horizontal(std::vector<std::reference_wrapper<cv::Mat>> const images,
-                     std::string const window_name = "images",
+void show_horizontal(std::vector<std::reference_wrapper<cv::Mat>> const & images,
+                     std::string const & window_name = "images",
                      int const timeout = 0)
 {
     if (!images.size())
@@ -67,6 +67,8 @@ void compute_disparity(const cv::Mat & from,
     sm->process(from, to);
     disparity = sm->getDisparity();
 }
+
+
 
 int main(int argc, char *argv[])
 {
