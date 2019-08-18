@@ -5,7 +5,7 @@ set(CMAKE_CXX_STANDARD_REQUIRED ON)
 set(CMAKE_CXX_EXTENSIONS OFF)
 
 # Configure OpenCV dependency
-find_package(OpenCV REQUIRED imgproc highgui calib3d stereo)
+find_package(OpenCV REQUIRED core imgproc highgui calib3d stereo)
 include_directories( ${OpenCV_INCLUDE_DIRS} )
 
 project(maskTimestamp VERSION 0.1 LANGUAGES CXX)
