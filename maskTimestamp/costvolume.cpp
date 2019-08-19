@@ -4,12 +4,25 @@
 #include <climits>
 #include <cmath>
 #include <cstdint>
+#include <type_traits>
 
 #include <opencv2/core/core.hpp>
+
+template<typename U, typename T>
+U narrow(T const big)
+{
+    static_assert(std::is_integral<T>::value, "Type T needs to be integral");
+    static_assert(std::is_unsigned<T>::value, "Type T needs to be unsigned");
+    static_assert(std::is_integral<U>::value, "Type U needs to be integral");
+
+    assert(std::numeric_limits<U>::max() >= big);
+    return static_cast<U>(big);
+}
 
 CostVolume::CostVolume(cv::Rect const &size, size_t const d)
     : m_cost_volume(static_cast<size_t>(size.width * size.height) * d, 0)
     , m_max_displacement(d)
+    , m_size(size)
 {
     assert(size.height > 0);
     assert(size.width > 0);
@@ -19,24 +32,22 @@ CostVolume::CostVolume(cv::Rect const &size, size_t const d)
 void CostVolume::calculate(const cv::Mat &left,
                            const cv::Mat &right,
                            const cv::Mat &mask,
-                           const size_t blocksize)
+                           const size_t block_size)
 {
-    assert(blocksize % 2);
+    assert(block_size % 2);
     assert(left.size == right.size);
     assert(right.size == mask.size);
 
-    // If the blocksize is divisible by 2, the center pixel index in the roi is
-    int const center_index = blocksize / 2;
+    int const center_index = narrow<int8_t>(block_size / 2);
     assert(center_index > 0);
 
-    assert(std::numeric_limits<int>::max() >= m_max_displacement);
-    auto const mxdsplcmnt = static_cast<int>(m_max_displacement);
+    auto const mxdsplcmnt = narrow<int>(m_max_displacement);
 
     // in every scanline, every pixel should be checked for every displacement
     for (int y = 0; y < left.rows; y++)
         for (int x = 0; x < left.cols; x++)
             for (int d = 0; d < mxdsplcmnt; d++) {
-                auto const blcksz = static_cast<int>(blocksize);
+                auto const blcksz = narrow<int>(block_size);
 
                 auto const left_roi = left({x - center_index,
                                             y - center_index,
@@ -63,8 +74,8 @@ void CostVolume::calculate(const cv::Mat &left,
                 // to an unsigned integral type can be made
                 assert(!std::signbit(x) && !std::signbit(y) && !std::signbit(d)
                        && !std::signbit(left.rows) && !std::signbit(left.cols));
-                m_cost_volume.at(to_linear(static_cast<size_t>(x),
-                                           static_cast<size_t>(y),
+                m_cost_volume.at(to_linear(static_cast<size_t>(y),
+                                           static_cast<size_t>(x),
                                            d,
                                            static_cast<size_t>(left.rows),
                                            static_cast<size_t>(left.cols)))
@@ -72,8 +83,8 @@ void CostVolume::calculate(const cv::Mat &left,
             }
 }
 
-size_t CostVolume::to_linear(size_t const x,
-                             size_t const scanline,
+size_t CostVolume::to_linear(size_t const scanline,
+                             size_t const x,
                              size_t const d,
                              size_t const scanline_dim,
                              size_t const x_dim) const
@@ -83,28 +94,45 @@ size_t CostVolume::to_linear(size_t const x,
     return (scanline + x * scanline_dim + d * scanline_dim * x_dim);
 }
 
+bool CostVolume::is_masked(const cv::Point2i &pixel) const
+{
+    assert(is_valid());
+
+    assert(m_mask.type() == CV_8UC1);
+    assert(pixel.x >= 0);
+    assert(pixel.y >= 0);
+
+    return m_mask.at<uint8_t>(pixel) > 0;
+}
+
 cv::Mat CostVolume::slice(const size_t y) const
 {
     assert(is_valid());
 
-    assert(std::numeric_limits<int>::max >= m_max_displacement);
-    auto const max_displacement = static_cast<int>(m_max_displacement);
+    // Reject all invalid scanline indices
+    assert(m_size.height >= 0);
+    auto const volume_height = static_cast<size_t>(m_size.height);
+    if (y >= volume_height)
+        return cv::Mat();
 
-    cv::Mat slice(max_displacement, m_size.width, CV_8S);
+    auto const max_displacement = narrow<int>(m_max_displacement);
 
-    for (int displacement = 0; displacement != max_displacement; displacement++)
-        for (int x = 0; x != m_size.width; x++) {
-            assert(displacement >= 0);
-            assert(x >= 0);
-            assert(m_size.width);
+    cv::Mat slice(max_displacement, m_size.width, CV_8SC1);
 
-            const auto disparity_value = m_cost_volume.at(
-                to_linear(static_cast<size_t>(x),
-                          y,
+    for (int displacement = 0;
+         displacement != 2 * max_displacement + 1;
+         ++displacement)
+        for (int x = 0; x != m_size.width; ++x) {
+            const auto matching_cost = m_cost_volume.at(
+                to_linear(y,
+                          static_cast<size_t>(x),
                           static_cast<size_t>(displacement),
                           m_max_displacement,
                           static_cast<size_t>(m_size.width)));
-            slice.at<int8_t>(displacement, x) = disparity_value; // TODO !!
+            slice.at<uint8_t>(displacement, x) =
+                matching_cost > std::numeric_limits<uint8_t>::max()
+                ? std::numeric_limits<uint8_t>::max()
+                : static_cast<uint8_t>(matching_cost);
         }
 
     return slice;
@@ -118,5 +146,6 @@ bool CostVolume::is_valid() const
            && (static_cast<size_t>(m_size.x)
                    * static_cast<size_t>(m_size.y)
                    * m_max_displacement
-                   == m_cost_volume.size());
+                   == m_cost_volume.size())
+           && (m_size == cv::Rect());
 }

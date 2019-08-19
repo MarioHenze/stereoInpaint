@@ -17,7 +17,7 @@ void show_horizontal(std::vector<std::reference_wrapper<cv::Mat>> const & images
                      std::string const & window_name = "images",
                      int const timeout = 0)
 {
-    if (!images.size())
+    if (images.empty())
         return;
 
     auto width{0};
