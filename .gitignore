@@ -1,6 +1,9 @@
 # CMake user configuration
 *.user
 
+# Qt Creator autosave
+*.autosave
+
 # Prerequisites
 *.d
 
