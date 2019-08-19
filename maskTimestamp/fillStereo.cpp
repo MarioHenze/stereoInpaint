@@ -13,6 +13,8 @@
 #include <opencv2/imgproc.hpp>
 #include <opencv2/stereo.hpp>
 
+#include "costvolume.h"
+
 void show_horizontal(std::vector<std::reference_wrapper<cv::Mat>> const & images,
                      std::string const & window_name = "images",
                      int const timeout = 0)
@@ -75,6 +77,7 @@ int main(int argc, char *argv[])
     const std::string options{
         "{help h usage ? |  | Print this message.}"
         "{gui | | Show input and resulting mask as window.}"
+        "{slice | | Save cost volume slices}"
         "{force | | Force writing over existing files}"
         "{@left | | left input image}"
         "{@right | | rigth input image}"
@@ -123,6 +126,11 @@ int main(int argc, char *argv[])
     {
         std::cerr << "Could not read all images and masks!";
         return -1;
+    }
+
+    if (parser.has("slice")) {
+        CostVolume cost_volume(cv::Rect(0,0,left.cols, left.rows), 10);
+
     }
 
     cv::Mat disparity_left;

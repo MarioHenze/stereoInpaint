@@ -29,14 +29,16 @@ CostVolume::CostVolume(cv::Rect const &size, size_t const d)
     assert(d > 0);
 }
 
-void CostVolume::calculate(const cv::Mat &left,
-                           const cv::Mat &right,
-                           const cv::Mat &mask,
-                           const size_t block_size)
+void CostVolume::calculate(cv::Mat const &left,
+                           cv::Mat const &right,
+                           cv::Mat const &left_mask,
+                           cv::Mat const &right_mask,
+                           size_t const block_size)
 {
     assert(block_size % 2);
     assert(left.size == right.size);
-    assert(right.size == mask.size);
+    assert(right.size == left_mask.size);
+    assert(left_mask.size == right_mask.size);
 
     int const center_index = narrow<int8_t>(block_size / 2);
     assert(center_index > 0);
