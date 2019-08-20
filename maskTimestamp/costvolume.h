@@ -24,6 +24,12 @@ public:
      */
     cv::Mat slice(const size_t y) const;
 
+    /**
+     * @brief slice_count reports the number of possible slices
+     * @return the slice count of the cost volume
+     */
+    size_t slice_count() const;
+
     bool is_valid() const;
 
 private:

@@ -130,7 +130,24 @@ int main(int argc, char *argv[])
 
     if (parser.has("slice")) {
         CostVolume cost_volume(cv::Rect(0,0,left.cols, left.rows), 10);
+        cost_volume.calculate(left, right, left_mask, right_mask);
 
+        // seperate slices for every pair into own folder to prevent mismatch
+        auto const path
+            = std::filesystem::path(parser.get<std::string>("@left"))
+                  .remove_filename().string();
+        auto const name
+            = std::filesystem::path(parser.get<std::string>("@left"))
+                  .filename().string()
+            + std::filesystem::path(parser.get<std::string>("@right"))
+                  .filename().string();
+        auto const folder_path = std::filesystem::path(path + name);
+        std::filesystem::create_directory(folder_path);
+
+        for (size_t i = 0; i < cost_volume.slice_count(); ++i) {
+            cv::Mat const slice = cost_volume.slice(i);
+            cv::imwrite(folder_path.string() + std::to_string(i), slice);
+        }
     }
 
     cv::Mat disparity_left;

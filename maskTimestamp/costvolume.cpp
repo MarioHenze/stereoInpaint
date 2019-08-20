@@ -1,12 +1,16 @@
 #include "costvolume.h"
 
+#include <algorithm>
 #include <cassert>
 #include <climits>
 #include <cmath>
 #include <cstdint>
+#include <forward_list>
+#include <numeric>
 #include <type_traits>
 
 #include <opencv2/core/core.hpp>
+#include <opencv2/imgproc.hpp>
 
 template<typename U, typename T>
 U narrow(T const big)
@@ -17,6 +21,37 @@ U narrow(T const big)
 
     assert(std::numeric_limits<U>::max() >= big);
     return static_cast<U>(big);
+}
+
+cv::Rect clamp_into(cv::Rect const & r, cv::Rect const & region)
+{
+    cv::Point2i const first(
+        std::clamp(r.x, region.x, region.x + region.width),
+        std::clamp(r.y, region.y, region.y + region.height));
+
+    cv::Point2i const second(
+        std::clamp(r.x + r.width, region.x, region.x + region.width),
+        std::clamp(r.y + r.height, region.y, region.y + region.height));
+
+    assert(region.contains(first));
+    assert(region.contains(second));
+
+    return cv::Rect(first, second);
+}
+
+cv::Rect clamp_into(cv::Rect const & r, cv::Mat const & region)
+{
+    return clamp_into(r, cv::Rect(0,0,region.cols, region.rows));
+}
+
+cv::Rect overlap(std::forward_list<cv::Rect> rects)
+{
+    cv::Rect region = rects.front();
+    std::for_each(rects.cbegin(),
+                  rects.cend(),
+                  [region](cv::Rect r) { clamp_into(r, region); });
+
+    return region;
 }
 
 CostVolume::CostVolume(cv::Rect const &size, size_t const d)
@@ -45,20 +80,36 @@ void CostVolume::calculate(cv::Mat const &left,
 
     auto const mxdsplcmnt = narrow<int>(m_max_displacement);
 
+    cv::Mat const left_gray;
+    cv::Mat const right_gray;
+    cv::cvtColor(left, const_cast<cv::Mat &>(left_gray), cv::COLOR_BGR2GRAY);
+    cv::cvtColor(right, const_cast<cv::Mat &>(right_gray), cv::COLOR_BGR2GRAY);
+
     // in every scanline, every pixel should be checked for every displacement
-    for (int y = 0; y < left.rows; y++)
-        for (int x = 0; x < left.cols; x++)
+    for (int y = 0; y < left_gray.rows; y++)
+        for (int x = 0; x < left_gray.cols; x++)
             for (int d = 0; d < mxdsplcmnt; d++) {
                 auto const blcksz = narrow<int>(block_size);
 
-                auto const left_roi = left({x - center_index,
-                                            y - center_index,
-                                            blcksz,
-                                            blcksz});
-                auto const right_roi = right({x - center_index - d,
-                                              y - center_index - d,
-                                              blcksz,
-                                              blcksz});
+                cv::Rect const left_block =
+                    clamp_into({x - center_index,
+                                          y - center_index,
+                                          blcksz,
+                                blcksz}, left_gray);
+                // On edges where the change in disparity changes the clamped
+                // shape of the ROI rectangle, it must be ensured, that the
+                // blocks still match
+                cv::Rect const right_block(left_block.x - d,
+                                           left_block.y - d,
+                                           left_block.width,
+                                           left_block.height);
+
+                assert(right_block == clamp_into(right_block, right_gray));
+
+                auto const left_roi =
+                    left_gray(clamp_into(left_block, left_gray));
+                auto const right_roi =
+                    right_gray(clamp_into(right_block, right_gray));
 
                 // use sum of absolute difference as disparity metric
                 cv::Mat const differences;
@@ -74,13 +125,16 @@ void CostVolume::calculate(cv::Mat const &left,
 
                 // if all coordinates are valid (i.e. positive) a conversation
                 // to an unsigned integral type can be made
-                assert(!std::signbit(x) && !std::signbit(y) && !std::signbit(d)
-                       && !std::signbit(left.rows) && !std::signbit(left.cols));
+                assert(!std::signbit(x) &&
+                       !std::signbit(y) &&
+                       !std::signbit(d) &&
+                       !std::signbit(left_gray.rows) &&
+                       !std::signbit(left_gray.cols));
                 m_cost_volume.at(to_linear(static_cast<size_t>(y),
                                            static_cast<size_t>(x),
                                            d,
-                                           static_cast<size_t>(left.rows),
-                                           static_cast<size_t>(left.cols)))
+                                           static_cast<size_t>(left_gray.rows),
+                                           static_cast<size_t>(left_gray.cols)))
                     = SAD;
             }
 }
@@ -112,9 +166,7 @@ cv::Mat CostVolume::slice(const size_t y) const
     assert(is_valid());
 
     // Reject all invalid scanline indices
-    assert(m_size.height >= 0);
-    auto const volume_height = static_cast<size_t>(m_size.height);
-    if (y >= volume_height)
+    if (y >= slice_count())
         return cv::Mat();
 
     auto const max_displacement = narrow<int>(m_max_displacement);
@@ -138,6 +190,14 @@ cv::Mat CostVolume::slice(const size_t y) const
         }
 
     return slice;
+}
+
+size_t CostVolume::slice_count() const
+{
+    assert(is_valid());
+
+    assert(m_size.height >= 0);
+    return static_cast<size_t>(m_size.height);
 }
 
 bool CostVolume::is_valid() const

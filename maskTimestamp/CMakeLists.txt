@@ -8,6 +8,9 @@ set(CMAKE_CXX_EXTENSIONS OFF)
 find_package(OpenCV REQUIRED core imgproc highgui calib3d stereo)
 include_directories( ${OpenCV_INCLUDE_DIRS} )
 
+# To include self built library objects
+set(CMAKE_LIBRARY_OUTPUT_DIRECTORY ${PROJECT_BINARY_DIR})
+
 project(maskTimestamp VERSION 0.1 LANGUAGES CXX)
 add_executable(${PROJECT_NAME} "main.cpp")
 target_link_libraries(${PROJECT_NAME} ${OpenCV_LIBRARIES} stdc++fs)
