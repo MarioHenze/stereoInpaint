@@ -25,18 +25,18 @@ U narrow(T const big)
 
 cv::Rect clamp_into(cv::Rect const & r, cv::Rect const & region)
 {
-    cv::Point2i const first(
-        std::clamp(r.x, region.x, region.x + region.width),
-        std::clamp(r.y, region.y, region.y + region.height));
+    cv::Point2i const upper_left(
+        std::clamp(r.x, region.x, region.x + region.width - 1),
+        std::clamp(r.y, region.y, region.y + region.height - 1));
 
-    cv::Point2i const second(
-        std::clamp(r.x + r.width, region.x, region.x + region.width),
-        std::clamp(r.y + r.height, region.y, region.y + region.height));
+    cv::Point2i const lower_right(
+        std::clamp(r.x + r.width - 1, region.x, region.x + region.width - 1),
+        std::clamp(r.y + r.height - 1, region.y, region.y + region.height - 1));
 
-    assert(region.contains(first));
-    assert(region.contains(second));
+    assert(region.contains(upper_left));
+    assert(region.contains(lower_right));
 
-    return cv::Rect(first, second);
+    return cv::Rect(upper_left, lower_right);
 }
 
 cv::Rect clamp_into(cv::Rect const & r, cv::Mat const & region)
@@ -49,7 +49,7 @@ cv::Rect overlap(std::forward_list<cv::Rect> rects)
     cv::Rect region = rects.front();
     std::for_each(rects.cbegin(),
                   rects.cend(),
-                  [region](cv::Rect r) { clamp_into(r, region); });
+                  [&region](cv::Rect r) { clamp_into(region, r); });
 
     return region;
 }
@@ -93,8 +93,8 @@ void CostVolume::calculate(cv::Mat const &left,
 
                 cv::Rect const left_block =
                     clamp_into({x - center_index,
-                                          y - center_index,
-                                          blcksz,
+                                y - center_index,
+                                blcksz,
                                 blcksz}, left_gray);
                 // On edges where the change in disparity changes the clamped
                 // shape of the ROI rectangle, it must be ensured, that the
@@ -103,13 +103,10 @@ void CostVolume::calculate(cv::Mat const &left,
                                            left_block.y - d,
                                            left_block.width,
                                            left_block.height);
+                cv::Rect block = overlap({left_block, right_block});
 
-                assert(right_block == clamp_into(right_block, right_gray));
-
-                auto const left_roi =
-                    left_gray(clamp_into(left_block, left_gray));
-                auto const right_roi =
-                    right_gray(clamp_into(right_block, right_gray));
+                auto const left_roi = left_gray(block);
+                auto const right_roi = right_gray(block);
 
                 // use sum of absolute difference as disparity metric
                 cv::Mat const differences;
@@ -205,9 +202,8 @@ bool CostVolume::is_valid() const
     assert(m_size.x >= 0);
     assert(m_size.y >= 0);
     return (m_size.area() > 0)
-           && (static_cast<size_t>(m_size.x)
-                   * static_cast<size_t>(m_size.y)
+           && (static_cast<size_t>(m_size.width)
+                   * static_cast<size_t>(m_size.height)
                    * m_max_displacement
-                   == m_cost_volume.size())
-           && (m_size == cv::Rect());
+                   == m_cost_volume.size());
 }

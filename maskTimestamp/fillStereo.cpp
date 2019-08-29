@@ -136,17 +136,23 @@ int main(int argc, char *argv[])
         auto const path
             = std::filesystem::path(parser.get<std::string>("@left"))
                   .remove_filename().string();
+        if (path.empty())
+            const_cast<std::string &>(path) = "./";
+
         auto const name
             = std::filesystem::path(parser.get<std::string>("@left"))
-                  .filename().string()
+                  .filename().replace_extension().string()
             + std::filesystem::path(parser.get<std::string>("@right"))
-                  .filename().string();
-        auto const folder_path = std::filesystem::path(path + name);
+                  .filename().replace_extension().string();
+        assert(!name.empty());
+
+        auto const folder_path = std::filesystem::path(path + name + "/");
         std::filesystem::create_directory(folder_path);
 
         for (size_t i = 0; i < cost_volume.slice_count(); ++i) {
             cv::Mat const slice = cost_volume.slice(i);
-            cv::imwrite(folder_path.string() + std::to_string(i), slice);
+            cv::imwrite(folder_path.string() + std::to_string(i) + ".PNG",
+                        slice);
         }
     }
 
