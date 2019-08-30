@@ -94,10 +94,10 @@ int main(int argc, char *argv[])
     }
 
     // Cut out usual timestamp region
-    cv::Mat in_image_cropped = in_image({origin.first,
+    cv::Mat in_image_cropped = in_image;/*({origin.first,
                                          origin.second,
                                          extend.first,
-                                         extend.second});
+                                         extend.second});*/
 
     if(parser.has("gui"))
         showImg(in_image_cropped);
@@ -110,22 +110,22 @@ int main(int argc, char *argv[])
     if(parser.has("gui"))
         showImg(mask);
 
-    cv::Mat filled = expand_morphological(mask, 3);
+    cv::Mat filled = expand_morphological(mask, 4);
 
     if(parser.has("gui"))
         showImg(filled);
 
-    // Write out mask image
+    /*// Write out mask image
     cv::Mat full_mask{in_image.size(), CV_8UC1};
     mask.copyTo(full_mask({origin.first,
                            origin.second,
                            extend.first,
-                           extend.second}));
+                           extend.second}));*/
 
     if(parser.has("gui"))
-        showImg(full_mask);
+        showImg(filled);//full_mask);
 
-    cv::imwrite(parser.get<std::string>("@output"), full_mask);
+    cv::imwrite(parser.get<std::string>("@output"), filled);//full_mask);
 
     return 0;
 }
