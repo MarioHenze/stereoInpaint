@@ -67,13 +67,16 @@ CostVolume::CostVolume(size_t const width, size_t const height, size_t const d)
 void CostVolume::calculate(cv::Mat const &left,
                            cv::Mat const &right,
                            cv::Mat const &left_mask,
-                           cv::Mat const &right_mask)
+                           cv::Mat const &right_mask,
+                           size_t const blocksize)
 {
+    assert(blocksize > 0);
+
     assert(left.size == right.size);
     assert(right.size == left_mask.size);
     assert(left_mask.size == right_mask.size);
 
-    int const center_index = narrow<int8_t>(m_displacements_per_pixel / 2);
+    int const center_index = narrow<int>(blocksize / 2);
     assert(center_index > 0);
 
     auto const mxdsplcmnt = narrow<int>(m_displacements_per_pixel);
@@ -84,15 +87,17 @@ void CostVolume::calculate(cv::Mat const &left,
     cv::cvtColor(right, const_cast<cv::Mat &>(right_gray), cv::COLOR_BGR2GRAY);
 
     // in every scanline, every pixel should be checked for every displacement
-    for (int y = 0; y < left_gray.rows; y++)
-        for (int x = 0; x < left_gray.cols; x++)
-            #pragma omp parallel for
-            for (int d = 0; d < mxdsplcmnt; d++) {
-                cv::Rect const left_block =
+    #pragma omp parallel for collapse(2)
+    for (int y = 0; y < left_gray.rows; y++) {
+        for (int x = 0; x < left_gray.cols; x++) {
+            // The first block against which the second will be tested
+            cv::Rect const left_block =
                     clamp_into({x - center_index,
                                 y - center_index,
-                                mxdsplcmnt,
-                                mxdsplcmnt}, left_gray);
+                                narrow<int>(blocksize),
+                                narrow<int>(blocksize)}, left_gray);
+
+            for (int d = 0; d < mxdsplcmnt; d++) {
                 // On edges where the change in disparity changes the clamped
                 // shape of the ROI rectangle, it must be ensured, that the
                 // blocks still match
@@ -134,6 +139,8 @@ void CostVolume::calculate(cv::Mat const &left,
                                       d))
                         = SAD;
             }
+        }
+    }
 }
 
 size_t CostVolume::to_linear(size_t const scanline,
@@ -169,6 +176,7 @@ bool CostVolume::is_masked(const cv::Point2i &pixel) const
 cv::Mat CostVolume::slice(const size_t scanline) const
 {
     assert(is_valid());
+    assert(scanline < slice_count());
 
     // Reject all invalid scanline indices
     if (scanline >= slice_count())

@@ -16,7 +16,8 @@ public:
     void calculate(cv::Mat const &left,
                    cv::Mat const &right,
                    cv::Mat const &left_mask = cv::Mat(),
-                   cv::Mat const &right_mask = cv::Mat());
+                   cv::Mat const &right_mask = cv::Mat(),
+                   size_t const blocksize = 5);
 
     /**
      * @brief slice draws a slice of the cost volume as image

@@ -134,7 +134,7 @@ int main(int argc, char *argv[])
         auto const cols{static_cast<size_t>(left.cols)};
         auto const rows{static_cast<size_t>(left.rows)};
 
-        CostVolume cost_volume(cols, rows, 2);
+        CostVolume cost_volume(cols, rows, 10);
         cost_volume.calculate(left, right, left_mask, right_mask);
 
         // seperate slices for every pair into own folder to prevent mismatch

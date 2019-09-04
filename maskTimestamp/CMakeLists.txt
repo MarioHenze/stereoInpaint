@@ -22,4 +22,7 @@ include_directories( ${OpenCV_INCLUDE_DIRS} )
 target_link_libraries(${PROJECT_NAME} ${OpenCV_LIBRARIES} stdc++fs)
 target_link_libraries(fillStereo ${OpenCV_LIBRARIES} stdc++fs pthread)
 
-
+find_package(OpenMP)
+if(OpenMP_CXX_FOUND)
+    target_link_libraries(fillStereo OpenMP::OpenMP_CXX)
+endif()
