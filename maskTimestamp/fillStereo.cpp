@@ -129,7 +129,12 @@ int main(int argc, char *argv[])
     }
 
     if (parser.has("slice")) {
-        CostVolume cost_volume(cv::Rect(0,0,left.cols, left.rows), 10);
+        assert(left.cols > 0);
+        assert(left.rows > 0);
+        auto const cols{static_cast<size_t>(left.cols)};
+        auto const rows{static_cast<size_t>(left.rows)};
+
+        CostVolume cost_volume(cols, rows, 2);
         cost_volume.calculate(left, right, left_mask, right_mask);
 
         // seperate slices for every pair into own folder to prevent mismatch
@@ -156,6 +161,7 @@ int main(int argc, char *argv[])
         }
     }
 
+    /*
     cv::Mat disparity_left;
     cv::Mat disparity_right;
 
@@ -173,7 +179,7 @@ int main(int argc, char *argv[])
     lr_disp_future.get();
     rl_disp_future.get();
 
-    show_horizontal({disparity_left, disparity_right});
+    show_horizontal({disparity_left, disparity_right});*/
 
     return 0;
 }

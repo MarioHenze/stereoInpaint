@@ -1,28 +1,29 @@
 #pragma once
 
+#include <cstddef>
 #include <vector>
 
 #include <opencv2/core/mat.hpp>
 #include <opencv2/core/types.hpp>
 
-bool operator==(cv::Point2i const &a, cv::Point2i const &b);
+template<typename U, typename T>
+U narrow(T const big);
 
 class CostVolume
 {
 public:
-    CostVolume(const cv::Rect &size, const size_t d);
+    CostVolume(const size_t height, const size_t width, const size_t d);
     void calculate(cv::Mat const &left,
                    cv::Mat const &right,
                    cv::Mat const &left_mask = cv::Mat(),
-                   cv::Mat const &right_mask = cv::Mat(),
-                   size_t const block_size = 5);
+                   cv::Mat const &right_mask = cv::Mat());
 
     /**
      * @brief slice draws a slice of the cost volume as image
-     * @param y the scanline at which to slice
+     * @param scanline the scanline at which to slice
      * @return the disparity slice
      */
-    cv::Mat slice(const size_t y) const;
+    cv::Mat slice(const size_t scanline) const;
 
     /**
      * @brief slice_count reports the number of possible slices
@@ -40,11 +41,14 @@ private:
     //! guessed in accordance to their neighbours
     cv::Mat m_mask;
 
-    //! Holds the maximum displacement in both directions
-    const size_t m_max_displacement;
+    //! The height of the volume
+    size_t const m_scanline_count;
 
-    //! Holds the frontal facing size of the cost volume (i.e. width and height)
-    cv::Rect m_size;
+    //! The amount of pixels on one scanline
+    size_t const m_pixels_per_scanline;
+
+    //! The amount of displacements of one pixel
+    size_t const m_displacements_per_pixel;
 
     /**
      * @brief to_linear maps a cost volume coordinate into linear memory
@@ -57,9 +61,7 @@ private:
      */
     size_t to_linear(const size_t scanline,
                      const size_t x,
-                     const size_t d,
-                     const size_t scanline_dim,
-                     const size_t x_dim) const;
+                     const size_t d) const;
     /**
      * @brief is_masked returns if a pixel location in the cost volume is masked
      * @param pixel the location in the cost volume

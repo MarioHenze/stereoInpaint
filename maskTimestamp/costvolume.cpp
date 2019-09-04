@@ -1,15 +1,14 @@
 #include "costvolume.h"
 
+#include <limits>
 #include <algorithm>
 #include <cassert>
-#include <climits>
 #include <cmath>
 #include <cstdint>
 #include <forward_list>
-#include <numeric>
 #include <type_traits>
 
-#include <opencv2/core/core.hpp>
+#include <opencv2/core.hpp>
 #include <opencv2/imgproc.hpp>
 
 template<typename U, typename T>
@@ -54,31 +53,30 @@ cv::Rect overlap(std::forward_list<cv::Rect> rects)
     return region;
 }
 
-CostVolume::CostVolume(cv::Rect const &size, size_t const d)
-    : m_cost_volume(static_cast<size_t>(size.width * size.height) * d, 0)
-    , m_max_displacement(d)
-    , m_size(size)
+CostVolume::CostVolume(size_t const width, size_t const height, size_t const d)
+    : m_cost_volume(width * height * (2 * d + 1), 0)
+    , m_scanline_count(height)
+    , m_pixels_per_scanline(width)
+    , m_displacements_per_pixel(2 * d + 1)
 {
-    assert(size.height > 0);
-    assert(size.width > 0);
+    assert(height > 0);
+    assert(width > 0);
     assert(d > 0);
 }
 
 void CostVolume::calculate(cv::Mat const &left,
                            cv::Mat const &right,
                            cv::Mat const &left_mask,
-                           cv::Mat const &right_mask,
-                           size_t const block_size)
+                           cv::Mat const &right_mask)
 {
-    assert(block_size % 2);
     assert(left.size == right.size);
     assert(right.size == left_mask.size);
     assert(left_mask.size == right_mask.size);
 
-    int const center_index = narrow<int8_t>(block_size / 2);
+    int const center_index = narrow<int8_t>(m_displacements_per_pixel / 2);
     assert(center_index > 0);
 
-    auto const mxdsplcmnt = narrow<int>(m_max_displacement);
+    auto const mxdsplcmnt = narrow<int>(m_displacements_per_pixel);
 
     cv::Mat const left_gray;
     cv::Mat const right_gray;
@@ -88,14 +86,13 @@ void CostVolume::calculate(cv::Mat const &left,
     // in every scanline, every pixel should be checked for every displacement
     for (int y = 0; y < left_gray.rows; y++)
         for (int x = 0; x < left_gray.cols; x++)
+            #pragma omp parallel for
             for (int d = 0; d < mxdsplcmnt; d++) {
-                auto const blcksz = narrow<int>(block_size);
-
                 cv::Rect const left_block =
                     clamp_into({x - center_index,
                                 y - center_index,
-                                blcksz,
-                                blcksz}, left_gray);
+                                mxdsplcmnt,
+                                mxdsplcmnt}, left_gray);
                 // On edges where the change in disparity changes the clamped
                 // shape of the ROI rectangle, it must be ensured, that the
                 // blocks still match
@@ -109,7 +106,10 @@ void CostVolume::calculate(cv::Mat const &left,
                 auto const right_roi = right_gray(block);
 
                 // use sum of absolute difference as disparity metric
-                cv::Mat const differences;
+                cv::Mat const differences(
+                            cv::Size(left_roi.cols, left_roi.rows),
+                            left_roi.type(),
+                            cv::Scalar(0));
                 cv::absdiff(left_roi,
                             right_roi,
                             const_cast<cv::Mat &>(differences));
@@ -124,27 +124,35 @@ void CostVolume::calculate(cv::Mat const &left,
                 // to an unsigned integral type can be made
                 assert(!std::signbit(x) &&
                        !std::signbit(y) &&
-                       !std::signbit(d) &&
-                       !std::signbit(left_gray.rows) &&
-                       !std::signbit(left_gray.cols));
-                m_cost_volume.at(to_linear(static_cast<size_t>(y),
-                                           static_cast<size_t>(x),
-                                           d,
-                                           static_cast<size_t>(left_gray.rows),
-                                           static_cast<size_t>(left_gray.cols)))
-                    = SAD;
+                       !std::signbit(d));
+
+                // NOTE As all cost values were preallocated, assume the write
+                // access to individual ints in the vector is threadsafe
+                m_cost_volume.at(
+                            to_linear(static_cast<size_t>(y),
+                                      static_cast<size_t>(x),
+                                      d))
+                        = SAD;
             }
 }
 
 size_t CostVolume::to_linear(size_t const scanline,
                              size_t const x,
-                             size_t const d,
-                             size_t const scanline_dim,
-                             size_t const x_dim) const
+                             size_t const d) const
 {
+    assert(scanline < m_scanline_count);
+    assert(x < m_pixels_per_scanline);
+    assert(d < m_displacements_per_pixel);
+
     // To get the linear array index sum up along
     // scanlines -> pixels -> disparity
-    return (scanline + x * scanline_dim + d * scanline_dim * x_dim);
+    const auto index{
+        d +
+        x * m_displacements_per_pixel +
+        scanline * m_pixels_per_scanline * m_displacements_per_pixel};
+
+    assert(index < m_cost_volume.size());
+    return index;
 }
 
 bool CostVolume::is_masked(const cv::Point2i &pixel) const
@@ -158,28 +166,32 @@ bool CostVolume::is_masked(const cv::Point2i &pixel) const
     return m_mask.at<uint8_t>(pixel) > 0;
 }
 
-cv::Mat CostVolume::slice(const size_t y) const
+cv::Mat CostVolume::slice(const size_t scanline) const
 {
     assert(is_valid());
 
     // Reject all invalid scanline indices
-    if (y >= slice_count())
+    if (scanline >= slice_count())
         return cv::Mat();
 
-    auto const max_displacement = narrow<int>(m_max_displacement);
+    auto const max_displacement = narrow<int>(m_displacements_per_pixel);
+    auto const width = narrow<int>(m_pixels_per_scanline);
 
-    cv::Mat slice(max_displacement, m_size.width, CV_8SC1);
+    cv::Mat slice(cv::Size(width, max_displacement),
+                  CV_8SC1,
+                  cv::Scalar(0));
 
-    for (int displacement = 0;
-         displacement != 2 * max_displacement + 1;
-         ++displacement)
-        for (int x = 0; x != m_size.width; ++x) {
-            const auto matching_cost = m_cost_volume.at(
-                to_linear(y,
-                          static_cast<size_t>(x),
-                          static_cast<size_t>(displacement),
-                          m_max_displacement,
-                          static_cast<size_t>(m_size.width)));
+    for (int displacement = 0; displacement < max_displacement; ++displacement)
+        for (int x = 0; x < width; ++x) {
+            const auto matching_cost =
+                    m_cost_volume.at(
+                        to_linear(
+                            scanline,
+                            static_cast<size_t>(x),
+                            static_cast<size_t>(displacement)
+                            )
+                        );
+
             slice.at<uint8_t>(displacement, x) =
                 matching_cost > std::numeric_limits<uint8_t>::max()
                 ? std::numeric_limits<uint8_t>::max()
@@ -193,17 +205,16 @@ size_t CostVolume::slice_count() const
 {
     assert(is_valid());
 
-    assert(m_size.height >= 0);
-    return static_cast<size_t>(m_size.height);
+    return m_scanline_count;
 }
 
 bool CostVolume::is_valid() const
 {
-    assert(m_size.x >= 0);
-    assert(m_size.y >= 0);
-    return (m_size.area() > 0)
-           && (static_cast<size_t>(m_size.width)
-                   * static_cast<size_t>(m_size.height)
-                   * m_max_displacement
-                   == m_cost_volume.size());
+    auto const volume {
+        m_scanline_count *
+        m_pixels_per_scanline *
+        m_displacements_per_pixel
+    };
+
+    return (volume > 0) && (volume == m_cost_volume.size());
 }
