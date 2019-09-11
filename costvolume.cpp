@@ -25,15 +25,12 @@ U narrow(T const big)
 cv::Rect clamp_into(cv::Rect const & r, cv::Rect const & region)
 {
     cv::Point2i const upper_left(
-        std::clamp(r.x, region.x, region.x + region.width - 1),
-        std::clamp(r.y, region.y, region.y + region.height - 1));
+        std::clamp(r.x, region.x, region.x + region.width),
+        std::clamp(r.y, region.y, region.y + region.height));
 
     cv::Point2i const lower_right(
-        std::clamp(r.x + r.width - 1, region.x, region.x + region.width - 1),
-        std::clamp(r.y + r.height - 1, region.y, region.y + region.height - 1));
-
-    assert(region.contains(upper_left));
-    assert(region.contains(lower_right));
+        std::clamp(r.x + r.width, region.x, region.x + region.width),
+        std::clamp(r.y + r.height, region.y, region.y + region.height));
 
     return cv::Rect(upper_left, lower_right);
 }
@@ -76,7 +73,7 @@ void CostVolume::calculate(cv::Mat const &left,
     assert(right.size == left_mask.size);
     assert(left_mask.size == right_mask.size);
 
-    int const center_index = narrow<int>(blocksize / 2);
+    auto const center_index = narrow<int>(blocksize / 2);
     assert(center_index > 0);
 
     auto const mxdsplcmnt = narrow<int>(m_displacements_per_pixel);
@@ -95,16 +92,19 @@ void CostVolume::calculate(cv::Mat const &left,
                     clamp_into({x - center_index,
                                 y - center_index,
                                 narrow<int>(blocksize),
-                                narrow<int>(blocksize)}, left_gray);
+                                narrow<int>(blocksize)},
+                               left_gray);
 
             for (int d = 0; d < mxdsplcmnt; d++) {
                 // On edges where the change in disparity changes the clamped
                 // shape of the ROI rectangle, it must be ensured, that the
                 // blocks still match
-                cv::Rect const right_block(left_block.x - d,
-                                           left_block.y - d,
-                                           left_block.width,
-                                           left_block.height);
+                cv::Rect const right_block =
+                        clamp_into({left_block.x + d,
+                                    left_block.y,
+                                    left_block.width,
+                                    left_block.height},
+                                   left_gray);
                 cv::Rect block = overlap({left_block, right_block});
 
                 auto const left_roi = left_gray(block);
@@ -124,6 +124,7 @@ void CostVolume::calculate(cv::Mat const &left,
                 assert(differences.channels() == 1);
                 size_t const SAD =
                     static_cast<size_t>(std::round(cv::sum(differences)[0]));
+                assert(SAD >= 0);
 
                 // if all coordinates are valid (i.e. positive) a conversation
                 // to an unsigned integral type can be made
@@ -186,7 +187,7 @@ cv::Mat CostVolume::slice(const size_t scanline) const
     auto const width = narrow<int>(m_pixels_per_scanline);
 
     cv::Mat slice(cv::Size(width, max_displacement),
-                  CV_8SC1,
+                  CV_8UC1,
                   cv::Scalar(0));
 
     for (int displacement = 0; displacement < max_displacement; ++displacement)
