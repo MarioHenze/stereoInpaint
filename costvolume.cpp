@@ -42,12 +42,27 @@ cv::Rect clamp_into(cv::Rect const & r, cv::Mat const & region)
 
 cv::Rect overlap(std::forward_list<cv::Rect> rects)
 {
-    cv::Rect region = rects.front();
-    std::for_each(rects.cbegin(),
-                  rects.cend(),
-                  [&region](cv::Rect r) { clamp_into(region, r); });
+    if (rects.empty())
+        return cv::Rect();
 
-    return region;
+    cv::Point2i upper_left = rects.front().tl();
+    cv::Point2i lower_right(rects.front().x + rects.front().width,
+                            rects.front().y + rects.front().height);
+
+    for (auto const &r : rects) {
+        upper_left.x = std::max(upper_left.x, r.x);
+        upper_left.y = std::max(upper_left.y, r.y);
+
+        lower_right.x = std::min(lower_right.x, r.x + r.width);
+        lower_right.y = std::min(lower_right.y, r.y + r.height);
+
+        // If the lower_right point is before the upper_right on any axis, it
+        // needs to be normalized again. Otherwise there would be negative area
+        lower_right.x = std::max(lower_right.x, upper_left.x);
+        lower_right.y = std::max(lower_right.y, upper_left.y);
+    }
+
+    return cv::Rect(upper_left, lower_right);
 }
 
 CostVolume::CostVolume(int const width, int const height, int const d)
