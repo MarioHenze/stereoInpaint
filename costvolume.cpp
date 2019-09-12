@@ -40,29 +40,19 @@ cv::Rect clamp_into(cv::Rect const & r, cv::Mat const & region)
     return clamp_into(r, cv::Rect(0,0,region.cols, region.rows));
 }
 
-cv::Rect overlap(std::forward_list<cv::Rect> rects)
+cv::Size overlap(std::forward_list<cv::Rect> rects)
 {
     if (rects.empty())
-        return cv::Rect();
+        return cv::Size();
 
-    cv::Point2i upper_left = rects.front().tl();
-    cv::Point2i lower_right(rects.front().x + rects.front().width,
-                            rects.front().y + rects.front().height);
+    cv::Size common_minimum = rects.front().size();
 
     for (auto const &r : rects) {
-        upper_left.x = std::max(upper_left.x, r.x);
-        upper_left.y = std::max(upper_left.y, r.y);
-
-        lower_right.x = std::min(lower_right.x, r.x + r.width);
-        lower_right.y = std::min(lower_right.y, r.y + r.height);
-
-        // If the lower_right point is before the upper_right on any axis, it
-        // needs to be normalized again. Otherwise there would be negative area
-        lower_right.x = std::max(lower_right.x, upper_left.x);
-        lower_right.y = std::max(lower_right.y, upper_left.y);
+        common_minimum.width = std::min(common_minimum.width, r.width);
+        common_minimum.height = std::min(common_minimum.height, r.height);
     }
 
-    return cv::Rect(upper_left, lower_right);
+    return common_minimum;
 }
 
 CostVolume::CostVolume(int const width, int const height, int const d)
@@ -109,27 +99,31 @@ void CostVolume::calculate(cv::Mat const &left,
     for (int y = 0; y < left_gray.rows; y++) {
         for (int x = 0; x < left_gray.cols; x++) {
             // The first block against which the second will be tested
-            cv::Rect const left_block =
-                    clamp_into({x - center_index,
-                                y - center_index,
-                                blocksize,
-                                blocksize},
-                               left_gray);
+            cv::Rect left_block = clamp_into({x - center_index,
+                                              y - center_index,
+                                              blocksize,
+                                              blocksize},
+                                             left_gray);
 
             for (int d = displ_begin; d < displ_middle; d++) {
                 // On edges where the change in disparity changes the clamped
                 // shape of the ROI rectangle, it must be ensured, that the
                 // blocks still match
-                cv::Rect const right_block =
-                        clamp_into({left_block.x - d,
-                                    left_block.y,
-                                    left_block.width,
-                                    left_block.height},
-                                   left_gray);
-                cv::Rect block = overlap({left_block, right_block});
+                cv::Rect right_block = clamp_into({left_block.x - d,
+                                                   left_block.y,
+                                                   left_block.width,
+                                                   left_block.height},
+                                                  left_gray);
+                auto common_size = overlap({left_block, right_block});
 
-                auto const left_roi = left_gray(block);
-                auto const right_roi = right_gray(block);
+                // Therefore modify the size of the ROIs
+                left_block.width = common_size.width;
+                left_block.height = common_size.height;
+                right_block.width = common_size.width;
+                right_block.height = common_size.height;
+
+                auto const left_roi = left_gray(left_block);
+                auto const right_roi = right_gray(right_block);
                 // use sum of absolute difference as disparity metric
                 cv::Mat const differences(
                             cv::Size(left_roi.cols, left_roi.rows),
