@@ -131,8 +131,8 @@ int main(int argc, char *argv[])
     if (parser.has("slice")) {
         assert(left.cols > 0);
         assert(left.rows > 0);
-        auto const cols{static_cast<size_t>(left.cols)};
-        auto const rows{static_cast<size_t>(left.rows)};
+        auto const cols{static_cast<int>(left.cols)};
+        auto const rows{static_cast<int>(left.rows)};
 
         CostVolume cost_volume(cols, rows, 2);
         cost_volume.calculate(left, right, left_mask, right_mask);
@@ -154,7 +154,7 @@ int main(int argc, char *argv[])
         auto const folder_path = std::filesystem::path(path + name + "/");
         std::filesystem::create_directory(folder_path);
 
-        for (size_t i = 0; i < cost_volume.slice_count(); ++i) {
+        for (int i = 0; i < cost_volume.slice_count(); ++i) {
             cv::Mat const slice = cost_volume.slice(i);
             cv::imwrite(folder_path.string() + std::to_string(i) + ".PNG",
                         slice);

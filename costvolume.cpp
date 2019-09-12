@@ -50,8 +50,8 @@ cv::Rect overlap(std::forward_list<cv::Rect> rects)
     return region;
 }
 
-CostVolume::CostVolume(size_t const width, size_t const height, size_t const d)
-    : m_cost_volume(width * height * (2 * d + 1), 0)
+CostVolume::CostVolume(int const width, int const height, int const d)
+    : m_cost_volume(static_cast<size_t>(width * height * (2 * d + 1)), 0)
     , m_scanline_count(height)
     , m_pixels_per_scanline(width)
     , m_displacements_per_pixel(2 * d + 1)
@@ -65,7 +65,7 @@ void CostVolume::calculate(cv::Mat const &left,
                            cv::Mat const &right,
                            cv::Mat const &left_mask,
                            cv::Mat const &right_mask,
-                           size_t const blocksize)
+                           int const blocksize)
 {
     assert(blocksize > 0);
 
@@ -73,10 +73,10 @@ void CostVolume::calculate(cv::Mat const &left,
     assert(right.size == left_mask.size);
     assert(left_mask.size == right_mask.size);
 
-    auto const center_index = narrow<int>(blocksize / 2);
+    auto const center_index = blocksize / 2;
     assert(center_index > 0);
 
-    auto const mxdsplcmnt = narrow<int>(m_displacements_per_pixel);
+    auto const mxdsplcmnt = m_displacements_per_pixel;
 
     cv::Mat const left_gray;
     cv::Mat const right_gray;
@@ -91,8 +91,8 @@ void CostVolume::calculate(cv::Mat const &left,
             cv::Rect const left_block =
                     clamp_into({x - center_index,
                                 y - center_index,
-                                narrow<int>(blocksize),
-                                narrow<int>(blocksize)},
+                                blocksize,
+                                blocksize},
                                left_gray);
 
             for (int d = 0; d < mxdsplcmnt; d++) {
@@ -122,8 +122,8 @@ void CostVolume::calculate(cv::Mat const &left,
                 // the difference image should only be gray and therefore the
                 // SAD is in the first channel of the sum image
                 assert(differences.channels() == 1);
-                size_t const SAD =
-                    static_cast<size_t>(std::round(cv::sum(differences)[0]));
+                int const SAD =
+                    static_cast<int>(std::round(cv::sum(differences)[0]));
                 assert(SAD >= 0);
 
                 // if all coordinates are valid (i.e. positive) a conversation
@@ -134,33 +134,34 @@ void CostVolume::calculate(cv::Mat const &left,
 
                 // NOTE As all cost values were preallocated, assume the write
                 // access to individual ints in the vector is threadsafe
-                m_cost_volume.at(
-                            to_linear(static_cast<size_t>(y),
-                                      static_cast<size_t>(x),
-                                      d))
-                        = SAD;
+                m_cost_volume.at(to_linear(y, x, d)) = SAD;
             }
         }
     }
 }
 
-size_t CostVolume::to_linear(size_t const scanline,
-                             size_t const x,
-                             size_t const d) const
+size_t CostVolume::to_linear(int const scanline, int const x, int const d) const
 {
+    assert(scanline >= 0);
+    assert(x >= 0);
+    assert(d >= 0);
     assert(scanline < m_scanline_count);
     assert(x < m_pixels_per_scanline);
     assert(d < m_displacements_per_pixel);
 
+    // TODO: Check for overflow, as qubic to linear conversion exhibits a high
+    // probability for this UB
+
     // To get the linear array index sum up along
     // scanlines -> pixels -> disparity
-    const auto index{
+    auto const index{
         d +
         x * m_displacements_per_pixel +
         scanline * m_pixels_per_scanline * m_displacements_per_pixel};
 
-    assert(index < m_cost_volume.size());
-    return index;
+    assert(index >= 0);
+    assert(static_cast<size_t>(index) < m_cost_volume.size());
+    return static_cast<size_t>(index);
 }
 
 bool CostVolume::is_masked(const cv::Point2i &pixel) const
@@ -174,7 +175,7 @@ bool CostVolume::is_masked(const cv::Point2i &pixel) const
     return m_mask.at<uint8_t>(pixel) > 0;
 }
 
-cv::Mat CostVolume::slice(const size_t scanline) const
+cv::Mat CostVolume::slice(const int scanline) const
 {
     assert(is_valid());
     assert(scanline < slice_count());
@@ -183,8 +184,8 @@ cv::Mat CostVolume::slice(const size_t scanline) const
     if (scanline >= slice_count())
         return cv::Mat();
 
-    auto const max_displacement = narrow<int>(m_displacements_per_pixel);
-    auto const width = narrow<int>(m_pixels_per_scanline);
+    auto const max_displacement = m_displacements_per_pixel;
+    auto const width = m_pixels_per_scanline;
 
     cv::Mat slice(cv::Size(width, max_displacement),
                   CV_8UC1,
@@ -196,8 +197,8 @@ cv::Mat CostVolume::slice(const size_t scanline) const
                     m_cost_volume.at(
                         to_linear(
                             scanline,
-                            static_cast<size_t>(x),
-                            static_cast<size_t>(displacement)
+                            x,
+                            displacement
                             )
                         );
 
@@ -210,7 +211,7 @@ cv::Mat CostVolume::slice(const size_t scanline) const
     return slice;
 }
 
-size_t CostVolume::slice_count() const
+int CostVolume::slice_count() const
 {
     assert(is_valid());
 
@@ -219,11 +220,18 @@ size_t CostVolume::slice_count() const
 
 bool CostVolume::is_valid() const
 {
+    bool const has_volume = (m_scanline_count > 0)
+                            && (m_pixels_per_scanline > 0)
+                            && (m_displacements_per_pixel > 0);
+
     auto const volume {
         m_scanline_count *
         m_pixels_per_scanline *
         m_displacements_per_pixel
     };
 
-    return (volume > 0) && (volume == m_cost_volume.size());
+    assert(volume >= 0);
+
+    return (has_volume)
+           && (static_cast<size_t>(volume) == m_cost_volume.size());
 }

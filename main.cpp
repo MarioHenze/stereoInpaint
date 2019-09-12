@@ -31,14 +31,14 @@ cv::Mat threshold_hsv(const cv::Mat & in,
 }
 
 cv::Mat expand_morphological(const cv::Mat & in,
-                             const size_t repetitions = 1)
+                             const int repetitions = 1)
 {
     cv::Mat morphKernel = getStructuringElement(cv::MorphShapes::MORPH_RECT,
                                                 cv::Size(3 , 3));
 
     cv::Mat ret{in};
 
-    for (size_t i = 0; i < repetitions; ++i) {
+    for (int i = 0; i < repetitions; ++i) {
         morphologyEx(in,
                      ret,
                      cv::MorphTypes::MORPH_DILATE,
@@ -50,11 +50,9 @@ cv::Mat expand_morphological(const cv::Mat & in,
 
 int main(int argc, char *argv[])
 {
-    constexpr std::pair<unsigned int, unsigned int> origin {1715, 1695};
-    constexpr std::pair<
-            unsigned int,
-            unsigned int>
-            extend {2495 - origin.first,1785 - origin.second};
+    constexpr std::pair<int, int> origin {1715, 1695};
+    constexpr std::pair<int, int> extend{2495 - origin.first,
+                                                  1785 - origin.second};
 
     const std::string options{
         "{help h usage ? |  | Print this message.}"
