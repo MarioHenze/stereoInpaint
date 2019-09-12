@@ -76,7 +76,13 @@ void CostVolume::calculate(cv::Mat const &left,
     auto const center_index = blocksize / 2;
     assert(center_index > 0);
 
-    auto const mxdsplcmnt = m_displacements_per_pixel;
+    // The disparity is a measure of distance of a point to an arbitrary focus
+    // plane. Therefore the disparity can be signed to reflect point behind
+    // plane and point in front of plane cases. Therefore we need to divide the
+    // maximum displacement interval into both cases.
+    auto const displ_count = m_displacements_per_pixel;
+    auto const displ_middle = displ_count / 2;
+    auto const displ_begin = -(displ_count - displ_middle);
 
     cv::Mat const left_gray;
     cv::Mat const right_gray;
@@ -84,7 +90,7 @@ void CostVolume::calculate(cv::Mat const &left,
     cv::cvtColor(right, const_cast<cv::Mat &>(right_gray), cv::COLOR_BGR2GRAY);
 
     // in every scanline, every pixel should be checked for every displacement
-    #pragma omp parallel for collapse(2)
+    //#pragma omp parallel for collapse(2)
     for (int y = 0; y < left_gray.rows; y++) {
         for (int x = 0; x < left_gray.cols; x++) {
             // The first block against which the second will be tested
@@ -95,12 +101,12 @@ void CostVolume::calculate(cv::Mat const &left,
                                 blocksize},
                                left_gray);
 
-            for (int d = 0; d < mxdsplcmnt; d++) {
+            for (int d = displ_begin; d < displ_middle; d++) {
                 // On edges where the change in disparity changes the clamped
                 // shape of the ROI rectangle, it must be ensured, that the
                 // blocks still match
                 cv::Rect const right_block =
-                        clamp_into({left_block.x + d,
+                        clamp_into({left_block.x - d,
                                     left_block.y,
                                     left_block.width,
                                     left_block.height},
@@ -109,13 +115,12 @@ void CostVolume::calculate(cv::Mat const &left,
 
                 auto const left_roi = left_gray(block);
                 auto const right_roi = right_gray(block);
-
                 // use sum of absolute difference as disparity metric
                 cv::Mat const differences(
                             cv::Size(left_roi.cols, left_roi.rows),
-                            left_roi.type(),
+                            left_roi.type(), // signed distance !!
                             cv::Scalar(0));
-                cv::absdiff(left_roi,
+                cv::absdiff(left_roi, // macht das wirklich das richtige?
                             right_roi,
                             const_cast<cv::Mat &>(differences));
 
@@ -126,15 +131,10 @@ void CostVolume::calculate(cv::Mat const &left,
                     static_cast<int>(std::round(cv::sum(differences)[0]));
                 assert(SAD >= 0);
 
-                // if all coordinates are valid (i.e. positive) a conversation
-                // to an unsigned integral type can be made
-                assert(!std::signbit(x) &&
-                       !std::signbit(y) &&
-                       !std::signbit(d));
-
                 // NOTE As all cost values were preallocated, assume the write
                 // access to individual ints in the vector is threadsafe
-                m_cost_volume.at(to_linear(y, x, d)) = SAD;
+                m_cost_volume.at(to_linear(y, x, d + std::abs(displ_begin)))
+                    = SAD;
             }
         }
     }
