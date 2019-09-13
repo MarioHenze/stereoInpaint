@@ -155,7 +155,8 @@ int main(int argc, char *argv[])
         std::filesystem::create_directory(folder_path);
 
         for (int i = 0; i < cost_volume.slice_count(); ++i) {
-            cv::Mat const slice = cost_volume.slice(i);
+            cv::Mat const slice
+                = cost_volume.slice(i);
             cv::imwrite(folder_path.string() + std::to_string(i) + ".PNG",
                         slice);
         }

@@ -197,7 +197,7 @@ cv::Mat CostVolume::slice(const int scanline) const
     auto const width = m_pixels_per_scanline;
 
     cv::Mat slice(cv::Size(width, max_displacement),
-                  CV_8UC1,
+                  CV_16UC1,
                   cv::Scalar(0));
 
     for (int displacement = 0; displacement < max_displacement; ++displacement)
@@ -211,10 +211,10 @@ cv::Mat CostVolume::slice(const int scanline) const
                             )
                         );
 
-            slice.at<uint8_t>(displacement, x) =
-                matching_cost > std::numeric_limits<uint8_t>::max()
-                ? std::numeric_limits<uint8_t>::max()
-                : static_cast<uint8_t>(matching_cost);
+            slice.at<uint16_t>(displacement, x) =
+                matching_cost > std::numeric_limits<uint16_t>::max()
+                ? std::numeric_limits<uint16_t>::max()
+                : static_cast<uint16_t>(matching_cost);
         }
 
     return slice;

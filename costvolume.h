@@ -1,6 +1,7 @@
 #pragma once
 
 #include <cstddef>
+#include <set>
 #include <vector>
 
 #include <opencv2/core/mat.hpp>
@@ -37,6 +38,9 @@ public:
 private:
     //! vector of scanlines, of pixels, of matching cost
     std::vector<int> m_cost_volume;
+
+    //! The set if all indices, which are masked by the timestamp
+    std::set<int> m_mask;
 
     //! If a pixel is contained in this mask all disparity values must be
     //! guessed in accordance to their neighbours
