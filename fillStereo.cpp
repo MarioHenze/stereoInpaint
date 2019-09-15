@@ -128,15 +128,10 @@ int main(int argc, char *argv[])
         return -1;
     }
 
+    CostVolume cost_volume(left.cols, left.rows, 10);
+    cost_volume.calculate(left, right, left_mask, right_mask);
+
     if (parser.has("slice")) {
-        assert(left.cols > 0);
-        assert(left.rows > 0);
-        auto const cols{static_cast<int>(left.cols)};
-        auto const rows{static_cast<int>(left.rows)};
-
-        CostVolume cost_volume(cols, rows, 10);
-        cost_volume.calculate(left, right, left_mask, right_mask);
-
         // seperate slices for every pair into own folder to prevent mismatch
         auto const path
             = std::filesystem::path(parser.get<std::string>("@left"))
@@ -161,6 +156,8 @@ int main(int argc, char *argv[])
                         slice);
         }
     }
+
+    auto const disparity_map = cost_volume.calculate_disparity_map();
 
     /*
     cv::Mat disparity_left;

@@ -1,15 +1,18 @@
 #include "costvolume.h"
 
-#include <limits>
 #include <algorithm>
 #include <cassert>
 #include <cmath>
 #include <cstdint>
 #include <forward_list>
+#include <limits>
+#include <list>
+#include <numeric>
 #include <type_traits>
 
 #include <opencv2/core.hpp>
 #include <opencv2/imgproc.hpp>
+#include <opencv2/core/types.hpp>
 
 template<typename U, typename T>
 U narrow(T const big)
@@ -78,6 +81,9 @@ void CostVolume::calculate(cv::Mat const &left,
     assert(right.size == left_mask.size);
     assert(left_mask.size == right_mask.size);
 
+    m_mask_left = left_mask.clone();
+    m_mask_right = right_mask.clone();
+
     auto const center_index = blocksize / 2;
     assert(center_index > 0);
 
@@ -95,7 +101,7 @@ void CostVolume::calculate(cv::Mat const &left,
     cv::cvtColor(right, const_cast<cv::Mat &>(right_gray), cv::COLOR_BGR2GRAY);
 
     // in every scanline, every pixel should be checked for every displacement
-    //#pragma omp parallel for collapse(2)
+    #pragma omp parallel for collapse(2)
     for (int y = 0; y < left_gray.rows; y++) {
         for (int x = 0; x < left_gray.cols; x++) {
             // The first block against which the second will be tested
@@ -147,6 +153,23 @@ void CostVolume::calculate(cv::Mat const &left,
             }
         }
     }
+
+    // The cost volume is now calculated, but at the partially masked locations
+    // we need to linearily interpolate the disparity value
+//    for (int y = 0; y < left_mask.rows; ++y) {
+//        for (int x = 0; x < left_mask.cols; ++x) {
+//            // If both or none images are masked, there is nothing to do
+//            auto const left_mask_pixel = left_mask.at<uint8_t>(x, y);
+//            auto const right_mask_pixel = right_mask.at<uint8_t>(x, y);
+//            if ((left_mask_pixel > 0 && right_mask_pixel > 0)
+//                || (left_mask_pixel == 0 && right_mask_pixel == 0))
+//                continue;
+
+//            // As we can only go from no <-> partial <-> full occlusion, we know
+//            // the last unoccluded pixel was one before this loop
+//            auto last_left_disparity = x - 1;
+//        }
+//    }
 }
 
 size_t CostVolume::to_linear(int const scanline, int const x, int const d) const
@@ -177,11 +200,11 @@ bool CostVolume::is_masked(const cv::Point2i &pixel) const
 {
     assert(is_valid());
 
-    assert(m_mask.type() == CV_8UC1);
+    //assert(m_mask.type() == CV_8UC1);
     assert(pixel.x >= 0);
     assert(pixel.y >= 0);
 
-    return m_mask.at<uint8_t>(pixel) > 0;
+    return false;//m_mask.at<uint8_t>(pixel) > 0;
 }
 
 cv::Mat CostVolume::slice(const int scanline) const
@@ -225,6 +248,138 @@ int CostVolume::slice_count() const
     assert(is_valid());
 
     return m_scanline_count;
+}
+
+std::vector<int> CostVolume::trace_disparity(const cv::Mat cost_slice) const
+{
+    assert(cost_slice.cols > 0);
+    assert(cost_slice.rows > 0);
+
+    // The accumulated cost map for the dynamic programming
+    cv::Mat D = cost_slice.clone();
+    D.convertTo(D, CV_32SC1);
+
+    for (int i = 1; i < D.cols; ++i) {
+        auto const prev_accumulated_col = D.col(i - 1);
+        auto const match_cost_col = D.col(i);
+
+        for (int d = 0; d < cost_slice.rows; ++d) {
+            // We need a vector which represents the cost of changing the
+            // disparity value
+            std::vector<int> change_cost(static_cast<size_t>(cost_slice.rows),
+                                         0);
+            std::iota(change_cost.begin(), change_cost.end(), -d);
+            // Our distance metric for changing the disparity value is x^2
+            std::for_each(change_cost.begin(),
+                          change_cost.end(),
+                          [](int const x) -> int { return std::pow(x, 2); });
+            // The cost is composed of the block matching cost, the accumulated
+            // cost from a previous cell and the step cost
+            auto sum = prev_accumulated_col.clone();
+            cv::add(prev_accumulated_col, change_cost, sum);
+
+            double min{0};
+            cv::minMaxIdx(sum, &min);
+            assert(static_cast<double>(std::numeric_limits<int32_t>::max())
+                   > min);
+            cv::add(match_cost_col, min, D.col(i));
+        }
+    }
+
+    std::vector<int> disparity(static_cast<size_t>(cost_slice.cols), 0);
+    // Now D contains the accumulated cost and the disparity corresponds with
+    // the y positions of the minimal path from right to left
+    for (int i = D.cols - 1; i >= 0; --i) {
+        int d{0};
+        cv::minMaxIdx(D.col(i), nullptr, nullptr, &d);
+        assert(d >= 0);
+        disparity.at(static_cast<size_t>(i)) = d;
+    }
+
+    return disparity;
+}
+
+cv::Mat CostVolume::calculate_disparity_map() const
+{
+    assert(m_mask_left.type() == CV_8UC1);
+
+    cv::Mat disparity_map(m_mask_left.rows, m_mask_left.cols, CV_32SC1);
+
+    // In every scanline we need to calculate the disparity line in the known
+    // regions and interpolate over masked intervals along the known endpoints
+    for (int scanline = 0; scanline < m_scanline_count; ++scanline) {
+        auto const cost_slice = slice(scanline);
+
+        std::vector<std::pair<int, int>> intervals;
+        int valid_count{0};
+        for (int pixel = 0; pixel < m_pixels_per_scanline; ++pixel) {
+            // is masked?
+            if (m_mask_left.at<uint8_t>(pixel, scanline) > 0) {
+                intervals.emplace_back(pixel - valid_count, pixel);
+            } else {
+                valid_count++;
+            }
+        }
+        // All entries where second == first result from masked cols
+        std::remove_if(intervals.begin(),
+                       intervals.end(),
+                       [](std::pair<int, int> const interval) -> bool {
+                           return interval.second == interval.first;
+                       });
+
+        // Contains all the disparity traces from the known regions
+        std::vector<std::vector<int>> traces;
+
+        for (auto const &interval : intervals) {
+            // This mat contains the continous intervals of the cost slice,
+            // which are not masked
+            auto const sub_slice = cost_slice.colRange(interval.first,
+                                                       interval.second);
+            traces.push_back(trace_disparity(sub_slice));
+        }
+
+        // clamp disparity value on front of scaline
+        if (intervals.front().first > 0) {
+            auto const value = traces.front().front();
+            disparity_map.row(scanline).colRange(0, intervals.front().first)
+                = value;
+        }
+
+        assert(traces.size() == intervals.size());
+        auto const lerp = [](int const a, int const b, float const t) -> int {
+            auto const result = std::lround(a + t * (b - a));
+            assert(std::numeric_limits<int>::max() >= result);
+            return static_cast<int>(result);
+        };
+
+        while (!intervals.empty()) {
+            auto const interval = intervals.front();
+            // The calculated disparity trace needs to be inserted
+            disparity_map.row(scanline)
+                .colRange(interval.first, interval.second)
+                .setTo(traces.front());
+            // Interpolate between the traces
+            if ((traces.size() > 1) && (intervals.size() > 1)) {
+                auto const last_prev_value = traces.front().back();
+                auto const first_next_value = traces.at(1).front();
+                auto row = disparity_map
+                               .row(scanline)
+                               .colRange(interval.second,
+                                         intervals.at(1).first);
+                for (int i = 0; i < row.cols; ++i) {
+                    row.at<int32_t>(i) = lerp(last_prev_value,
+                                              first_next_value,
+                                              i / static_cast<float>(row.cols));
+                }
+            }
+            intervals.erase(intervals.begin());
+            traces.erase(traces.begin());
+        }
+    }
+
+    // TODO add offset !!
+
+    return disparity_map;
 }
 
 bool CostVolume::is_valid() const

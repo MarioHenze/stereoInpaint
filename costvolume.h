@@ -33,18 +33,34 @@ public:
      */
     int slice_count() const;
 
+    /**
+     * @brief trace_disparity finds the disparity for a scanline in a cost slice
+     * through dynamic programming
+     * @param cost_slice a map of the block matching costs for one scanline
+     * @return a vector of disparity value for every pixel along the scanline
+     */
+    std::vector<int> trace_disparity(cv::Mat const cost_slice) const;
+
+    /**
+     * @brief calculate_disparity_map retrieves the disparity map, with all
+     * masked regions interpolated along the scanline
+     * @return the interpolated disparity map
+     */
+    cv::Mat calculate_disparity_map() const;
+
     bool is_valid() const;
 
 private:
     //! vector of scanlines, of pixels, of matching cost
     std::vector<int> m_cost_volume;
 
-    //! The set if all indices, which are masked by the timestamp
-    std::set<int> m_mask;
+    //! If a pixel is contained in this mask all disparity values must be
+    //! guessed in accordance to their neighbours
+    cv::Mat m_mask_left;
 
     //! If a pixel is contained in this mask all disparity values must be
     //! guessed in accordance to their neighbours
-    cv::Mat m_mask;
+    cv::Mat m_mask_right;
 
     //! The height of the volume
     int const m_scanline_count;
