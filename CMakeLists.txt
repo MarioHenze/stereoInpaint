@@ -26,7 +26,7 @@ target_link_libraries(fillStereo PUBLIC ${OpenCV_LIBRARIES} stdc++fs pthread)
 target_link_libraries(
     fillStereo
     PRIVATE
-    "$<$<CONFIG:Debug>:-fsanitize=address,undefined>"
+    "$<$<CONFIG:Debug>:-fsanitize=undefined>"
     )
 
 find_package(OpenMP)

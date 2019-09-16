@@ -112,7 +112,12 @@ std::pair<cv::Mat, cv::Mat> morph_by_disparity(cv::Mat const &source,
 
             auto const disp_at_location = disp_map.at<int32_t>(pixel, scanline);
             auto const mapped_pixel = pixel + disp_at_location;
-            // Our target already contains valid data at the remapped point
+
+            // The target location lies outside of the frame
+            if (mapped_pixel >= target_mask.rows)
+                continue;
+
+            // The target already contains valid data at the remapped point
             if (target_mask.at<uint8_t>(mapped_pixel, scanline) == 0)
                 continue;
 
@@ -138,32 +143,24 @@ int main(int argc, char *argv[])
         "{@left | | left input image}"
         "{@right | | rigth input image}"
         "{@left_mask | | left mask image}"
-        "{@right_mask | | rigth mask image}"
-    };
+        "{@right_mask | | rigth mask image}"};
     cv::CommandLineParser parser{argc, argv, options};
 
-    if (parser.has("h"))
-    {
+    if (parser.has("h")) {
         parser.printMessage();
         return 0;
     }
 
-    if (
-            !parser.has("@left") || !parser.has("@right") ||
-            !parser.has("@left_mask") || !parser.has("@right_mask")
-       )
-    {
+    if (!parser.has("@left") || !parser.has("@right")
+        || !parser.has("@left_mask") || !parser.has("@right_mask")) {
         std::cerr << "Not all images were specified!";
         return -1;
     }
 
-    if (
-            !std::filesystem::exists(parser.get<std::string>("@left")) ||
-            !std::filesystem::exists(parser.get<std::string>("@right")) ||
-            !std::filesystem::exists(parser.get<std::string>("@left_mask")) ||
-            !std::filesystem::exists(parser.get<std::string>("@right_mask"))
-       )
-    {
+    if (!std::filesystem::exists(parser.get<std::string>("@left"))
+        || !std::filesystem::exists(parser.get<std::string>("@right"))
+        || !std::filesystem::exists(parser.get<std::string>("@left_mask"))
+        || !std::filesystem::exists(parser.get<std::string>("@right_mask"))) {
         std::cerr << "Not all images exist";
         return -1;
     }
@@ -173,13 +170,8 @@ int main(int argc, char *argv[])
     cv::Mat left_mask = cv::imread(parser.get<std::string>("@left_mask"));
     cv::Mat right_mask = cv::imread(parser.get<std::string>("@right_mask"));
 
-    if (
-            left.empty() ||
-            right.empty() ||
-            left_mask.empty() ||
-            right_mask.empty()
-       )
-    {
+    if (left.empty() || right.empty() || left_mask.empty()
+        || right_mask.empty()) {
         std::cerr << "Could not read all images and masks!";
         return -1;
     }
@@ -193,47 +185,119 @@ int main(int argc, char *argv[])
         cv::cvtColor(right_mask, right_mask, cv::COLOR_BGR2GRAY);
     }
 
+    // After rectification the timestamp location are not correlated anymore and
+    // therefore we have different cost volumes, depending on the mapping
+    // direction
+    CostVolume cost_to_right(left.cols, left.rows, 10);
+    CostVolume cost_to_left(right.cols, right.rows, 10);
 
-    CostVolume cost_volume(left.cols, left.rows, 10);
-    cost_volume.calculate(left, right, left_mask, right_mask, 9);
+    // As both calculation are very similar, there is no gain in calculating
+    // them in parallel as the two threads would only compete for the same
+    // resources. The calculation in itself is already multithreaded!
+    cost_to_right.calculate(left, right, left_mask, right_mask, 9);
+    cost_to_left.calculate(right, left, right_mask, left_mask, 9);
 
-    if (parser.has("slice")) {
-        // seperate slices for every pair into own folder to prevent mismatch
-        auto const path
-            = std::filesystem::path(parser.get<std::string>("@left"))
-                  .remove_filename().string();
-        if (path.empty())
-            const_cast<std::string &>(path) = "./";
+    //    if (parser.has("slice")) {
+    //        // seperate slices for every pair into own folder to prevent mismatch
+    //        auto const path
+    //            = std::filesystem::path(parser.get<std::string>("@left"))
+    //                  .remove_filename().string();
+    //        if (path.empty())
+    //            const_cast<std::string &>(path) = "./";
 
-        auto const name
-            = std::filesystem::path(parser.get<std::string>("@left"))
-                  .filename().replace_extension().string()
-            + std::filesystem::path(parser.get<std::string>("@right"))
-                  .filename().replace_extension().string();
-        assert(!name.empty());
+    //        auto const name
+    //            = std::filesystem::path(parser.get<std::string>("@left"))
+    //                  .filename().replace_extension().string()
+    //            + std::filesystem::path(parser.get<std::string>("@right"))
+    //                  .filename().replace_extension().string();
+    //        assert(!name.empty());
 
-        auto const folder_path = std::filesystem::path(path + name + "/");
-        std::filesystem::create_directory(folder_path);
+    //        auto const folder_path = std::filesystem::path(path + name + "/");
+    //        std::filesystem::create_directory(folder_path);
 
-        for (int i = 0; i < cost_volume.slice_count(); ++i) {
-            cv::Mat const slice
-                = cost_volume.slice(i);
-            cv::imwrite(folder_path.string() + std::to_string(i) + ".PNG",
-                        slice);
-        }
+    //        for (int i = 0; i < cost_volume.slice_count(); ++i) {
+    //            cv::Mat const slice
+    //                = cost_volume.slice(i);
+    //            cv::imwrite(folder_path.string() + std::to_string(i) + ".PNG",
+    //                        slice);
+    //        }
+    //    }
+
+    cv::Mat disparity_to_right;
+    cv::Mat disparity_to_left;
+    { // Parallel computation of the disparity maps
+        auto to_right_future = std::async(std::launch::async,
+                                          &CostVolume::calculate_disparity_map,
+                                          &cost_to_right);
+        auto to_left_future = std::async(std::launch::async,
+                                         &CostVolume::calculate_disparity_map,
+                                         &cost_to_left);
+        disparity_to_right = to_right_future.get().clone();
+        disparity_to_left = to_left_future.get().clone();
     }
 
-    auto const disparity_map = cost_volume.calculate_disparity_map();
-    //cv::imshow("disp_map", disparity_map);
-    //cv::waitKey();
-    //cv::imwrite("disparity_map.png", disparity_map);
+    cv::Mat remapped_left;
+    cv::Mat remapped_left_mask;
+    cv::Mat remapped_right;
+    cv::Mat remapped_right_mask;
+    { // Parallel remapping according to the disparity maps
+        auto to_right_future = std::async(std::launch::async,
+                                          &morph_by_disparity,
+                                          std::ref(left),
+                                          std::ref(left_mask),
+                                          std::ref(right),
+                                          std::ref(right_mask),
+                                          std::ref(disparity_to_right));
+        auto to_left_future = std::async(std::launch::async,
+                                         &morph_by_disparity,
+                                         std::ref(right),
+                                         std::ref(right_mask),
+                                         std::ref(left),
+                                         std::ref(left_mask),
+                                         std::ref(disparity_to_left));
 
-    auto const remapped_right = morph_by_disparity(left,
-                                                   left_mask,
-                                                   right,
-                                                   right_mask,
-                                                   disparity_map);
-    cv::imwrite("remap.jpg", remapped_right.first);
+        auto const to_right_pair = to_right_future.get();
+        auto const to_left_pair = to_left_future.get();
+
+        remapped_right = to_right_pair.first.clone();
+        remapped_right_mask = to_right_pair.second.clone();
+        remapped_left = to_left_pair.first.clone();
+        remapped_left_mask = to_left_pair.second.clone();
+    }
+
+    auto const prefix = "remapped_";
+    cv::imwrite(prefix
+                    + std::filesystem::path(parser.get<std::string>("@left"))
+                          .filename()
+                          .string(),
+                remapped_left);
+    cv::imwrite(prefix
+                    + std::filesystem::path(
+                          parser.get<std::string>("@left_mask"))
+                          .filename()
+                          .string(),
+                remapped_left_mask);
+    cv::imwrite(prefix
+                    + std::filesystem::path(parser.get<std::string>("@right"))
+                          .filename()
+                          .string(),
+                remapped_right);
+    cv::imwrite(prefix
+                    + std::filesystem::path(
+                          parser.get<std::string>("@right_mask"))
+                          .filename()
+                          .string(),
+                remapped_right_mask);
+
+    //auto const disparity_map_to_right = cost_to_right.calculate_disparity_map();
+
+
+//    auto const remapped_right = morph_by_disparity(left,
+//                                                   left_mask,
+//                                                   right,
+//                                                   right_mask,
+//                                                   disparity_map_to_right);
+//    cv::imwrite("remap.jpg", remapped_right.first);
 
     /*
     cv::Mat disparity_left;
