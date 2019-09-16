@@ -276,7 +276,13 @@ std::vector<int> CostVolume::trace_disparity(const cv::Mat cost_slice) const
             // The cost is composed of the block matching cost, the accumulated
             // cost from a previous cell and the step cost
             auto sum = prev_accumulated_col.clone();
-            cv::add(prev_accumulated_col, change_cost, sum);
+            auto const cost_mat = cv::Mat(change_cost.size(),
+                                          1,
+                                          CV_32SC1,
+                                          change_cost.data());
+            cv::add(prev_accumulated_col,
+                    cost_mat,
+                    sum);
 
             double min{0};
             cv::minMaxIdx(sum, &min);
@@ -303,7 +309,7 @@ cv::Mat CostVolume::calculate_disparity_map() const
 {
     assert(m_mask_left.type() == CV_8UC1);
 
-    cv::Mat disparity_map(m_mask_left.rows, m_mask_left.cols, CV_32SC1);
+    cv::Mat disparity_map(m_mask_left.rows, m_mask_left.cols, CV_32S);
 
     // In every scanline we need to calculate the disparity line in the known
     // regions and interpolate over masked intervals along the known endpoints
@@ -314,18 +320,31 @@ cv::Mat CostVolume::calculate_disparity_map() const
         int valid_count{0};
         for (int pixel = 0; pixel < m_pixels_per_scanline; ++pixel) {
             // is masked?
-            if (m_mask_left.at<uint8_t>(pixel, scanline) > 0) {
-                intervals.emplace_back(pixel - valid_count, pixel);
-            } else {
+            auto const pixel_value = m_mask_left.at<uint8_t>(scanline, pixel);
+            if (pixel_value == 0) {
                 valid_count++;
+            } else {
+                // We've encountered a masked pixel and valid_count gives us the
+                // witdh of the interval containing unmasked pixels
+                intervals.emplace_back(pixel - valid_count, pixel);
+                valid_count = 0;
             }
         }
+
+        // If the scanline ends on a valid pixel insert interval
+        if (valid_count > 0) {
+            intervals.emplace_back(m_pixels_per_scanline - valid_count,
+                                   m_pixels_per_scanline);
+        }
+
+        auto const same_pred = [](std::pair<int, int> const interval) -> bool {
+            return interval.second == interval.first;
+        };
         // All entries where second == first result from masked cols
-        std::remove_if(intervals.begin(),
-                       intervals.end(),
-                       [](std::pair<int, int> const interval) -> bool {
-                           return interval.second == interval.first;
-                       });
+        intervals.erase(std::remove_if(intervals.begin(),
+                                       intervals.end(),
+                                       same_pred),
+                        intervals.end());
 
         // Contains all the disparity traces from the known regions
         std::vector<std::vector<int>> traces;
@@ -355,9 +374,14 @@ cv::Mat CostVolume::calculate_disparity_map() const
         while (!intervals.empty()) {
             auto const interval = intervals.front();
             // The calculated disparity trace needs to be inserted
-            disparity_map.row(scanline)
-                .colRange(interval.first, interval.second)
-                .setTo(traces.front());
+            auto const trace_mat = cv::Mat(1, traces.front().size(), CV_32S, traces.front().data());
+//            disparity_map.row(scanline)
+//                .colRange(interval.first, interval.second)
+//                .setTo(trace_mat);
+            trace_mat.copyTo(
+                disparity_map.row(scanline).colRange(interval.first,
+                                                     interval.second));
+            //                .setTo(trace_mat))
             // Interpolate between the traces
             if ((traces.size() > 1) && (intervals.size() > 1)) {
                 auto const last_prev_value = traces.front().back();

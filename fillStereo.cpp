@@ -6,6 +6,7 @@
 
 #include <opencv2/calib3d.hpp>
 #include <opencv2/core.hpp>
+#include <opencv2/core/matx.hpp>
 #include <opencv2/core/utility.hpp>
 #include <opencv2/features2d.hpp>
 #include <opencv2/highgui.hpp>
@@ -70,7 +71,62 @@ void compute_disparity(const cv::Mat & from,
     disparity = sm->getDisparity();
 }
 
+/**
+ * @brief morph_by_disparity morphs valid pixels into masked regions
+ * @param source partial occluded data from one view
+ * @param source_mask the occlusion mask for the source view
+ * @param target partial occluded data from another view
+ * @param target_mask occlusion mask for the target view
+ * @param disp_map disparity map which translates pixel positions from the
+ * source view into the target view
+ * @return a pair with first containing the target image with additional pixels
+ * of the source image, and second containing the modified mask
+ */
+std::pair<cv::Mat, cv::Mat> morph_by_disparity(cv::Mat const &source,
+                                               cv::Mat const &source_mask,
+                                               cv::Mat const &target,
+                                               cv::Mat const &target_mask,
+                                               cv::Mat const &disp_map)
+{
+    assert(!source.empty());
+    assert(!source_mask.empty());
+    assert(!target.empty());
+    assert(!target_mask.empty());
+    assert(!disp_map.empty());
 
+    assert(source.size() == source_mask.size());
+    assert(source_mask.size() == target.size());
+    assert(target.size() == target_mask.size());
+    assert(target_mask.size() == disp_map.size());
+
+    assert(disp_map.type() == CV_32S);
+
+    cv::Mat target_remapped = target.clone();
+    cv::Mat target_mask_remapped = target_mask.clone();
+
+    for (int scanline = 0; scanline < source.cols; ++scanline) {
+        for (int pixel = 0; pixel < source.rows; ++pixel) {
+            // Our source is invalid at the location
+            if (source_mask.at<uint8_t>(pixel, scanline) > 0)
+                continue;
+
+            auto const disp_at_location = disp_map.at<int32_t>(pixel, scanline);
+            auto const mapped_pixel = pixel + disp_at_location;
+            // Our target already contains valid data at the remapped point
+            if (target_mask.at<uint8_t>(mapped_pixel, scanline) == 0)
+                continue;
+
+            // As our preconditions hold true, e.g. we have a valid source pixel
+            // and a masked target, we can copy our pixel
+            target_remapped.at<cv::Vec3b>(mapped_pixel, scanline)
+                = source.at<cv::Vec3b>(pixel, scanline);
+            // Zap mask bits out of our initial target mask
+            target_mask_remapped.at<uint8_t>(mapped_pixel, scanline) = 0;
+        }
+    }
+
+    return std::make_pair(target_remapped, target_mask_remapped);
+}
 
 int main(int argc, char *argv[])
 {
@@ -128,8 +184,18 @@ int main(int argc, char *argv[])
         return -1;
     }
 
+    // As the mask are stored as png, we need to convert them to grayscale
+    if (left_mask.type() == CV_8UC3) {
+        cv::cvtColor(left_mask, left_mask, cv::COLOR_BGR2GRAY);
+    }
+
+    if (right_mask.type() == CV_8UC3) {
+        cv::cvtColor(right_mask, right_mask, cv::COLOR_BGR2GRAY);
+    }
+
+
     CostVolume cost_volume(left.cols, left.rows, 10);
-    cost_volume.calculate(left, right, left_mask, right_mask);
+    cost_volume.calculate(left, right, left_mask, right_mask, 9);
 
     if (parser.has("slice")) {
         // seperate slices for every pair into own folder to prevent mismatch
@@ -158,6 +224,16 @@ int main(int argc, char *argv[])
     }
 
     auto const disparity_map = cost_volume.calculate_disparity_map();
+    //cv::imshow("disp_map", disparity_map);
+    //cv::waitKey();
+    //cv::imwrite("disparity_map.png", disparity_map);
+
+    auto const remapped_right = morph_by_disparity(left,
+                                                   left_mask,
+                                                   right,
+                                                   right_mask,
+                                                   disparity_map);
+    cv::imwrite("remap.jpg", remapped_right.first);
 
     /*
     cv::Mat disparity_left;
