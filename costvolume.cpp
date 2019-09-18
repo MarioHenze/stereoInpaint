@@ -1,5 +1,6 @@
 #include "costvolume.h"
 
+#include <iostream>
 #include <algorithm>
 #include <cassert>
 #include <cmath>
@@ -100,8 +101,13 @@ void CostVolume::calculate(cv::Mat const &left,
     cv::cvtColor(left, const_cast<cv::Mat &>(left_gray), cv::COLOR_BGR2GRAY);
     cv::cvtColor(right, const_cast<cv::Mat &>(right_gray), cv::COLOR_BGR2GRAY);
 
+    // Variables from inside the loop
+    cv::Mat left_roi;
+    cv::Mat right_roi;
+    cv::Mat differences;
+
     // in every scanline, every pixel should be checked for every displacement
-    #pragma omp parallel for collapse(2)
+    //#pragma omp parallel for
     for (int y = 0; y < left_gray.rows; y++) {
         for (int x = 0; x < left_gray.cols; x++) {
             // The first block against which the second will be tested
@@ -128,16 +134,16 @@ void CostVolume::calculate(cv::Mat const &left,
                 right_block.width = common_size.width;
                 right_block.height = common_size.height;
 
-                auto const left_roi = left_gray(left_block);
-                auto const right_roi = right_gray(right_block);
+                //auto const left_roi = left_gray(left_block);
+                //auto const right_roi = right_gray(right_block);
                 // use sum of absolute difference as disparity metric
-                cv::Mat const differences(
-                            cv::Size(left_roi.cols, left_roi.rows),
-                            left_roi.type(), // signed distance !!
-                            cv::Scalar(0));
+//                cv::Mat const differences(
+//                            cv::Size(left_roi.cols, left_roi.rows),
+//                            left_roi.type(), // signed distance !!
+//                            cv::Scalar(0));
                 cv::absdiff(left_roi, // macht das wirklich das richtige?
                             right_roi,
-                            const_cast<cv::Mat &>(differences));
+                            differences);
 
                 // the difference image should only be gray and therefore the
                 // SAD is in the first channel of the sum image
@@ -259,9 +265,13 @@ std::vector<int> CostVolume::trace_disparity(const cv::Mat cost_slice) const
     cv::Mat D = cost_slice.clone();
     D.convertTo(D, CV_32SC1);
 
+    cv::Mat prev_accumulated_col;
+    cv::Mat match_cost_col;
+    cv::Mat sum;
+
     for (int i = 1; i < D.cols; ++i) {
-        auto const prev_accumulated_col = D.col(i - 1);
-        auto const match_cost_col = D.col(i);
+        prev_accumulated_col = D.col(i - 1);
+        match_cost_col = D.col(i);
 
         for (int d = 0; d < cost_slice.rows; ++d) {
             // We need a vector which represents the cost of changing the
@@ -272,10 +282,11 @@ std::vector<int> CostVolume::trace_disparity(const cv::Mat cost_slice) const
             // Our distance metric for changing the disparity value is x^2
             std::for_each(change_cost.begin(),
                           change_cost.end(),
-                          [](int const x) -> int { return std::pow(x, 2); });
+                          [](int const x) -> int { return x * x; });
             // The cost is composed of the block matching cost, the accumulated
             // cost from a previous cell and the step cost
-            auto sum = prev_accumulated_col.clone();
+            //cv::Mat sum;
+            //= prev_accumulated_col.clone();
             auto const cost_mat = cv::Mat(change_cost.size(),
                                           1,
                                           CV_32SC1,
@@ -288,7 +299,12 @@ std::vector<int> CostVolume::trace_disparity(const cv::Mat cost_slice) const
             cv::minMaxIdx(sum, &min);
             assert(static_cast<double>(std::numeric_limits<int32_t>::max())
                    > min);
-            cv::add(match_cost_col, min, D.col(i));
+            cv::add(match_cost_col,
+                    cv::Mat(match_cost_col.rows,
+                            match_cost_col.cols,
+                            match_cost_col.type(),
+                            static_cast<int32_t>(min)),
+                    D.col(i));
         }
     }
 
@@ -311,10 +327,14 @@ cv::Mat CostVolume::calculate_disparity_map() const
 
     cv::Mat disparity_map(m_mask_left.rows, m_mask_left.cols, CV_32S);
 
+    // Variables from the loop
+    cv::Mat cost_slice;
+
     // In every scanline we need to calculate the disparity line in the known
     // regions and interpolate over masked intervals along the known endpoints
     for (int scanline = 0; scanline < m_scanline_count; ++scanline) {
-        auto const cost_slice = slice(scanline);
+        //auto const cost_slice = slice(scanline);
+        cost_slice = slice(scanline);
 
         std::vector<std::pair<int, int>> intervals;
         int valid_count{0};
@@ -371,13 +391,18 @@ cv::Mat CostVolume::calculate_disparity_map() const
             return static_cast<int>(result);
         };
 
+        cv::Mat trace_mat;
         while (!intervals.empty()) {
             auto const interval = intervals.front();
             // The calculated disparity trace needs to be inserted
-            auto const trace_mat = cv::Mat(1, traces.front().size(), CV_32S, traces.front().data());
-//            disparity_map.row(scanline)
-//                .colRange(interval.first, interval.second)
-//                .setTo(trace_mat);
+            //auto const trace_mat = cv::Mat(1,
+            trace_mat = cv::Mat(1,
+                                traces.front().size(),
+                                CV_32S,
+                                traces.front().data());
+            //            disparity_map.row(scanline)
+            //                .colRange(interval.first, interval.second)
+            //                .setTo(trace_mat);
             trace_mat.copyTo(
                 disparity_map.row(scanline).colRange(interval.first,
                                                      interval.second));
@@ -401,7 +426,9 @@ cv::Mat CostVolume::calculate_disparity_map() const
         }
     }
 
-    // TODO add offset !!
+    // As the disparity for the slices is calculated between 0 and 2 * d + 1
+    // we need to shift the disparity map into -d and +d
+    cv::subtract(disparity_map, m_displacements_per_pixel / 2, disparity_map);
 
     return disparity_map;
 }

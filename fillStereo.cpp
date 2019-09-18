@@ -2,6 +2,7 @@
 #include <filesystem>
 #include <future>
 #include <iostream>
+#include <mutex>
 #include <vector>
 
 #include <opencv2/calib3d.hpp>
@@ -15,6 +16,8 @@
 #include <opencv2/stereo.hpp>
 
 #include "costvolume.h"
+
+std::mutex m_cout_mutex;
 
 void show_horizontal(std::vector<std::reference_wrapper<cv::Mat>> const & images,
                      std::string const & window_name = "images",
@@ -104,6 +107,7 @@ std::pair<cv::Mat, cv::Mat> morph_by_disparity(cv::Mat const &source,
     cv::Mat target_remapped = target.clone();
     cv::Mat target_mask_remapped = target_mask.clone();
 
+    #pragma omp parallel for
     for (int scanline = 0; scanline < source.cols; ++scanline) {
         for (int pixel = 0; pixel < source.rows; ++pixel) {
             // Our source is invalid at the location
@@ -114,19 +118,22 @@ std::pair<cv::Mat, cv::Mat> morph_by_disparity(cv::Mat const &source,
             auto const mapped_pixel = pixel + disp_at_location;
 
             // The target location lies outside of the frame
-            if (mapped_pixel >= target_mask.rows)
+            if (mapped_pixel >= target_mask.rows || mapped_pixel < 0)
                 continue;
 
             // The target already contains valid data at the remapped point
             if (target_mask.at<uint8_t>(mapped_pixel, scanline) == 0)
                 continue;
 
-            // As our preconditions hold true, e.g. we have a valid source pixel
-            // and a masked target, we can copy our pixel
-            target_remapped.at<cv::Vec3b>(mapped_pixel, scanline)
-                = source.at<cv::Vec3b>(pixel, scanline);
-            // Zap mask bits out of our initial target mask
-            target_mask_remapped.at<uint8_t>(mapped_pixel, scanline) = 0;
+// As our preconditions hold true, e.g. we have a valid source pixel
+// and a masked target, we can copy our pixel
+#pragma omp critical
+            {
+                target_remapped.at<cv::Vec3b>(mapped_pixel, scanline)
+                    = source.at<cv::Vec3b>(pixel, scanline);
+                // Zap mask bits out of our initial target mask
+                target_mask_remapped.at<uint8_t>(mapped_pixel, scanline) = 0;
+            }
         }
     }
 
@@ -139,6 +146,7 @@ int main(int argc, char *argv[])
         "{help h usage ? |  | Print this message.}"
         "{gui | | Show input and resulting mask as window.}"
         "{slice | | Save cost volume slices}"
+        "{disparity | | Save disparity maps}"
         "{force | | Force writing over existing files}"
         "{@left | | left input image}"
         "{@right | | rigth input image}"
@@ -188,44 +196,76 @@ int main(int argc, char *argv[])
     // After rectification the timestamp location are not correlated anymore and
     // therefore we have different cost volumes, depending on the mapping
     // direction
-    CostVolume cost_to_right(left.cols, left.rows, 10);
-    CostVolume cost_to_left(right.cols, right.rows, 10);
+    CostVolume cost_to_right(left.cols, left.rows, 80);
+    CostVolume cost_to_left(right.cols, right.rows, 80);
 
-    // As both calculation are very similar, there is no gain in calculating
-    // them in parallel as the two threads would only compete for the same
-    // resources. The calculation in itself is already multithreaded!
-    cost_to_right.calculate(left, right, left_mask, right_mask, 9);
-    cost_to_left.calculate(right, left, right_mask, left_mask, 9);
+    {
+    std::cout << "Calculating to right cost volume" << std::endl;
+    //cost_to_right.calculate(left, right, left_mask, right_mask, 9);
+    auto cost_to_right_future = std::async(std::launch::async,
+                                           &CostVolume::calculate,
+                                           &cost_to_right,
+                                           std::ref(left),
+                                           std::ref(right),
+                                           std::ref(left_mask),
+                                           std::ref(right_mask),
+                                           9);
+    std::cout << "Calculating to left cost volume" << std::endl;
+    //cost_to_left.calculate(right, left, right_mask, left_mask, 9);
+    auto cost_to_left_future = std::async(std::launch::async,
+                                          &CostVolume::calculate,
+                                          &cost_to_left,
+                                          std::ref(right),
+                                          std::ref(left),
+                                          std::ref(right_mask),
+                                          std::ref(left_mask),
+                                          9);
+    }
 
-    //    if (parser.has("slice")) {
-    //        // seperate slices for every pair into own folder to prevent mismatch
-    //        auto const path
-    //            = std::filesystem::path(parser.get<std::string>("@left"))
-    //                  .remove_filename().string();
-    //        if (path.empty())
-    //            const_cast<std::string &>(path) = "./";
+    if (parser.has("slice")) {
+        std::cout << "Slicing cost volume\n";
+        // seperate slices for every pair into own folder to prevent mismatch
+        auto const path = std::filesystem::path(
+                              parser.get<std::string>("@left"))
+                              .remove_filename()
+                              .string();
+        if (path.empty())
+            const_cast<std::string &>(path) = "./";
 
-    //        auto const name
-    //            = std::filesystem::path(parser.get<std::string>("@left"))
-    //                  .filename().replace_extension().string()
-    //            + std::filesystem::path(parser.get<std::string>("@right"))
-    //                  .filename().replace_extension().string();
-    //        assert(!name.empty());
+        auto const name = std::filesystem::path(
+                              parser.get<std::string>("@left"))
+                              .filename()
+                              .replace_extension()
+                              .string()
+                          + std::filesystem::path(
+                                parser.get<std::string>("@right"))
+                                .filename()
+                                .replace_extension()
+                                .string();
+        assert(!name.empty());
 
-    //        auto const folder_path = std::filesystem::path(path + name + "/");
-    //        std::filesystem::create_directory(folder_path);
+        auto const folder_path = std::filesystem::path(path + name + "/");
+        std::filesystem::create_directory(folder_path);
 
-    //        for (int i = 0; i < cost_volume.slice_count(); ++i) {
-    //            cv::Mat const slice
-    //                = cost_volume.slice(i);
-    //            cv::imwrite(folder_path.string() + std::to_string(i) + ".PNG",
-    //                        slice);
-    //        }
-    //    }
+        for (int i = 0; i < cost_to_right.slice_count(); ++i) {
+            cv::Mat const slice = cost_to_right.slice(i);
+            cv::imwrite(folder_path.string() + "to_r" + std::to_string(i)
+                            + ".PNG",
+                        slice);
+        }
+
+        for (int i = 0; i < cost_to_left.slice_count(); ++i) {
+            cv::Mat const slice = cost_to_left.slice(i);
+            cv::imwrite(folder_path.string() + "to_l" + std::to_string(i)
+                            + ".PNG",
+                        slice);
+        }
+    }
 
     cv::Mat disparity_to_right;
     cv::Mat disparity_to_left;
     { // Parallel computation of the disparity maps
+        std::cout << "Calculate disparity map" << std::endl;
         auto to_right_future = std::async(std::launch::async,
                                           &CostVolume::calculate_disparity_map,
                                           &cost_to_right);
@@ -236,28 +276,55 @@ int main(int argc, char *argv[])
         disparity_to_left = to_left_future.get().clone();
     }
 
+    if (parser.has("disparity")) {
+        cv::imwrite("disparity_to_right_"
+                        + std::filesystem::path(
+                              parser.get<std::string>("@left"))
+                              .filename()
+                              .string() + ".PNG",
+                    disparity_to_right);
+        cv::imwrite("disparity_to_left_"
+                        + std::filesystem::path(
+                              parser.get<std::string>("@right"))
+                              .filename()
+                              .string() + ".PNG",
+                    disparity_to_left);
+    }
+
     cv::Mat remapped_left;
     cv::Mat remapped_left_mask;
     cv::Mat remapped_right;
     cv::Mat remapped_right_mask;
     { // Parallel remapping according to the disparity maps
-        auto to_right_future = std::async(std::launch::async,
-                                          &morph_by_disparity,
-                                          std::ref(left),
-                                          std::ref(left_mask),
-                                          std::ref(right),
-                                          std::ref(right_mask),
-                                          std::ref(disparity_to_right));
-        auto to_left_future = std::async(std::launch::async,
-                                         &morph_by_disparity,
-                                         std::ref(right),
-                                         std::ref(right_mask),
-                                         std::ref(left),
-                                         std::ref(left_mask),
-                                         std::ref(disparity_to_left));
+        std::cout << "Remapping image" << std::endl;
+        //        auto to_right_future = std::async(std::launch::async,
+        //                                          &morph_by_disparity,
+        //                                          std::ref(left),
+        //                                          std::ref(left_mask),
+        //                                          std::ref(right),
+        //                                          std::ref(right_mask),
+        //                                          std::ref(disparity_to_right));
+        //        auto to_left_future = std::async(std::launch::async,
+        //                                         &morph_by_disparity,
+        //                                         std::ref(right),
+        //                                         std::ref(right_mask),
+        //                                         std::ref(left),
+        //                                         std::ref(left_mask),
+        //                                         std::ref(disparity_to_left));
 
-        auto const to_right_pair = to_right_future.get();
-        auto const to_left_pair = to_left_future.get();
+        //        auto const to_right_pair = to_right_future.get();
+        //        auto const to_left_pair = to_left_future.get();
+
+        auto const to_right_pair = morph_by_disparity(left,
+                                                      left_mask,
+                                                      right,
+                                                      right_mask,
+                                                      disparity_to_right);
+        auto const to_left_pair = morph_by_disparity(right,
+                                                     right_mask,
+                                                     left,
+                                                     left_mask,
+                                                     disparity_to_left);
 
         remapped_right = to_right_pair.first.clone();
         remapped_right_mask = to_right_pair.second.clone();
@@ -265,28 +332,39 @@ int main(int argc, char *argv[])
         remapped_left_mask = to_left_pair.second.clone();
     }
 
+    cv::threshold(remapped_left_mask,
+                  remapped_left_mask,
+                  0.5,
+                  255,
+                  cv::THRESH_BINARY);
+    cv::threshold(remapped_right_mask,
+                  remapped_right_mask,
+                  0.5,
+                  255,
+                  cv::THRESH_BINARY);
+
     auto const prefix = "remapped_";
     cv::imwrite(prefix
                     + std::filesystem::path(parser.get<std::string>("@left"))
                           .filename()
-                          .string(),
+                          .string() + ".PNG",
                 remapped_left);
     cv::imwrite(prefix
                     + std::filesystem::path(
                           parser.get<std::string>("@left_mask"))
                           .filename()
-                          .string(),
+                          .string() + ".PNG",
                 remapped_left_mask);
     cv::imwrite(prefix
                     + std::filesystem::path(parser.get<std::string>("@right"))
                           .filename()
-                          .string(),
+                          .string() + ".PNG",
                 remapped_right);
     cv::imwrite(prefix
                     + std::filesystem::path(
                           parser.get<std::string>("@right_mask"))
                           .filename()
-                          .string(),
+                          .string() + ".PNG",
                 remapped_right_mask);
 
     //auto const disparity_map_to_right = cost_to_right.calculate_disparity_map();
