@@ -129,6 +129,14 @@ void CostVolume::calculate(cv::Mat const &left,
                                                   left_gray);
                 auto common_size = overlap({left_block, right_block});
 
+                // For degenerate case set maximal cost
+                if (common_size.area() <= 0) {
+                    m_cost_volume.at(to_linear(y, x, d + std::abs(displ_begin)))
+                        = std::numeric_limits<decltype(
+                            m_cost_volume)::value_type>::max();
+                    continue;
+                }
+
                 // Therefore modify the size of the ROIs
                 left_block.width = common_size.width;
                 left_block.height = common_size.height;
@@ -269,13 +277,13 @@ std::vector<int> CostVolume::trace_disparity(const cv::Mat cost_slice) const
     cv::Mat D = cost_slice.clone();
     D.convertTo(D, CV_32SC1);
 
-    cv::Mat prev_accumulated_col;
-    cv::Mat match_cost_col;
-    cv::Mat sum;
+//    cv::Mat prev_accumulated_col;
+//    cv::Mat match_cost_col;
+//    cv::Mat sum;
 
     for (int i = 1; i < D.cols; ++i) {
-        /*cv::Mat */prev_accumulated_col = D.col(i - 1);
-        /*cv::Mat */match_cost_col = D.col(i);
+        cv::Mat prev_accumulated_col = D.col(i - 1);
+        cv::Mat match_cost_col = D.col(i);
 
         for (int d = 0; d < cost_slice.rows; ++d) {
             // We need a vector which represents the cost of changing the
@@ -289,7 +297,7 @@ std::vector<int> CostVolume::trace_disparity(const cv::Mat cost_slice) const
                           [](int const x) -> int { return x * x; });
             // The cost is composed of the block matching cost, the accumulated
             // cost from a previous cell and the step cost
-            //cv::Mat sum = prev_accumulated_col.clone();
+            cv::Mat sum = prev_accumulated_col.clone();
             auto const cost_mat = cv::Mat(change_cost.size(),
                                           1,
                                           CV_32SC1,
