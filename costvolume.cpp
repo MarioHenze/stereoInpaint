@@ -14,6 +14,7 @@
 #include <opencv2/core.hpp>
 #include <opencv2/imgproc.hpp>
 #include <opencv2/core/types.hpp>
+#include <opencv2/highgui.hpp>
 
 template<typename U, typename T>
 U narrow(T const big)
@@ -102,9 +103,9 @@ void CostVolume::calculate(cv::Mat const &left,
     cv::cvtColor(right, const_cast<cv::Mat &>(right_gray), cv::COLOR_BGR2GRAY);
 
     // Variables from inside the loop
-    cv::Mat left_roi;
-    cv::Mat right_roi;
-    cv::Mat differences;
+    //cv::Mat left_roi;
+    //cv::Mat right_roi;
+    //cv::Mat differences;
 
     // in every scanline, every pixel should be checked for every displacement
     //#pragma omp parallel for
@@ -134,13 +135,13 @@ void CostVolume::calculate(cv::Mat const &left,
                 right_block.width = common_size.width;
                 right_block.height = common_size.height;
 
-                //auto const left_roi = left_gray(left_block);
-                //auto const right_roi = right_gray(right_block);
+                auto const left_roi = left_gray(left_block);
+                auto const right_roi = right_gray(right_block);
                 // use sum of absolute difference as disparity metric
-//                cv::Mat const differences(
-//                            cv::Size(left_roi.cols, left_roi.rows),
-//                            left_roi.type(), // signed distance !!
-//                            cv::Scalar(0));
+                cv::Mat const differences(
+                            cv::Size(left_roi.cols, left_roi.rows),
+                            left_roi.type(), // signed distance !!
+                            cv::Scalar(0));
                 cv::absdiff(left_roi, // macht das wirklich das richtige?
                             right_roi,
                             differences);
@@ -261,6 +262,9 @@ std::vector<int> CostVolume::trace_disparity(const cv::Mat cost_slice) const
     assert(cost_slice.cols > 0);
     assert(cost_slice.rows > 0);
 
+    //cv::imshow("sdhf", cost_slice);
+    //cv::waitKey(0);
+
     // The accumulated cost map for the dynamic programming
     cv::Mat D = cost_slice.clone();
     D.convertTo(D, CV_32SC1);
@@ -270,8 +274,8 @@ std::vector<int> CostVolume::trace_disparity(const cv::Mat cost_slice) const
     cv::Mat sum;
 
     for (int i = 1; i < D.cols; ++i) {
-        prev_accumulated_col = D.col(i - 1);
-        match_cost_col = D.col(i);
+        /*cv::Mat */prev_accumulated_col = D.col(i - 1);
+        /*cv::Mat */match_cost_col = D.col(i);
 
         for (int d = 0; d < cost_slice.rows; ++d) {
             // We need a vector which represents the cost of changing the
@@ -285,12 +289,12 @@ std::vector<int> CostVolume::trace_disparity(const cv::Mat cost_slice) const
                           [](int const x) -> int { return x * x; });
             // The cost is composed of the block matching cost, the accumulated
             // cost from a previous cell and the step cost
-            //cv::Mat sum;
-            //= prev_accumulated_col.clone();
+            //cv::Mat sum = prev_accumulated_col.clone();
             auto const cost_mat = cv::Mat(change_cost.size(),
                                           1,
                                           CV_32SC1,
                                           change_cost.data());
+
             cv::add(prev_accumulated_col,
                     cost_mat,
                     sum);
@@ -328,13 +332,16 @@ cv::Mat CostVolume::calculate_disparity_map() const
     cv::Mat disparity_map(m_mask_left.rows, m_mask_left.cols, CV_32S);
 
     // Variables from the loop
-    cv::Mat cost_slice;
+    //cv::Mat cost_slice;
 
     // In every scanline we need to calculate the disparity line in the known
     // regions and interpolate over masked intervals along the known endpoints
     for (int scanline = 0; scanline < m_scanline_count; ++scanline) {
         //auto const cost_slice = slice(scanline);
-        cost_slice = slice(scanline);
+        cv::Mat cost_slice = slice(scanline);
+
+//        cv::imshow("sfd", cost_slice);
+//        cv::waitKey(0);
 
         std::vector<std::pair<int, int>> intervals;
         int valid_count{0};
